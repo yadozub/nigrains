@@ -23,13 +23,16 @@ Run: ``uv run python bench/bench.py``
 from __future__ import annotations
 
 import asyncio
+import gc
 import platform
 import statistics
 import sys
 import time
+import tracemalloc
 from collections.abc import Awaitable, Callable
 
 from nigrains import Grain, GrainId, Runtime
+from nigrains import runtime as runtime_module
 
 TURNS = 20
 """Event-loop turns a 'slow' method yields for.
@@ -226,6 +229,174 @@ async def herd(callers: int = 1_000) -> float:
     return wall
 
 
+async def dispatch_at_scale(
+    fleet: tuple[int, ...] = (1, 1_000, 100_000),
+) -> list[tuple[int, float]]:
+    """Measures dispatch with a small, a large and a very large fleet activated.
+
+    The activation table is a dict, so this should be flat. "Should be" is
+    why it is measured: a runtime whose dispatch degraded with the number of
+    live grains would be one whose whole premise - address anything, cheaply
+    - stopped holding exactly when it mattered.
+
+    Args:
+        fleet: How many grains to have activated for each measurement.
+
+    Returns:
+        Fleet size and seconds per dispatched call.
+    """
+    calls = 20_000
+    results = []
+    for size in fleet:
+        runtime = Runtime()
+        runtime.register("hot", Hot)
+        await asyncio.gather(*(runtime.call(GrainId("hot", str(n)), "touch") for n in range(size)))
+        target = GrainId("hot", str(size - 1))
+
+        async def hammer(grain_id: GrainId = target, on: Runtime = runtime) -> None:
+            for _ in range(calls):
+                await on.call(grain_id, "touch")
+
+        results.append((size, await _timed(hammer, repeats=3) / calls))
+    return results
+
+
+async def memory_per_activation(grains: int = 100_000) -> float:
+    """Measures what the runtime spends to keep one grain activated.
+
+    The grain here holds nothing, so what is measured is the runtime's own
+    bookkeeping - the identity, the activation record, the future, the lock
+    if there is one. Whatever a real grain holds is added to this, and the
+    answer to "how many can one node keep" starts here.
+
+    Args:
+        grains: How many to activate.
+
+    Returns:
+        Bytes per activation.
+    """
+    runtime = Runtime()
+    runtime.register("trivial", Trivial)
+
+    gc.collect()
+    tracemalloc.start()
+    before = tracemalloc.get_traced_memory()[0]
+    await asyncio.gather(*(runtime.call(GrainId("trivial", str(n)), "ping") for n in range(grains)))
+    # Without this the reading includes 100 000 finished tasks the gather
+    # has not let go of yet, and calls them the cost of an activation. The
+    # first version of this measurement did exactly that.
+    gc.collect()
+    after = tracemalloc.get_traced_memory()[0]
+    tracemalloc.stop()
+    assert runtime.activated == grains
+    return (after - before) / grains
+
+
+async def sweep_cost(grains: int = 100_000, *, chunk: int | None = None) -> tuple[float, float]:
+    """Measures collecting a large idle fleet, and what it does to the loop.
+
+    **Total time is the less interesting of the two numbers**, and taking it
+    alone was misleading: chunking the sweep made the total *worse* - the
+    yields cost something - while making the thing that actually hurt
+    disappear, which was one uninterrupted stall with every other coroutine
+    waiting behind it. So a heartbeat runs alongside and records the longest
+    gap between its own turns, which is what a caller would have felt.
+
+    Args:
+        grains: How many idle grains to collect.
+        chunk: Override the runtime's chunk size, so the same run can
+            measure what the sweep did before it was chunked. Reaches into
+            a private constant, which a benchmark may do and nothing else
+            should.
+
+    Returns:
+        Seconds for the sweep, and the longest loop stall during it.
+    """
+    original = runtime_module._SWEEP_CHUNK
+    if chunk is not None:
+        runtime_module._SWEEP_CHUNK = chunk
+    try:
+        return await _swept(grains)
+    finally:
+        runtime_module._SWEEP_CHUNK = original
+
+
+async def _swept(grains: int) -> tuple[float, float]:
+    """Runs one sweep with a heartbeat beside it.
+
+    Args:
+        grains: How many idle grains to collect.
+
+    Returns:
+        Seconds for the sweep, and the longest loop stall during it.
+    """
+    clock = _Frozen()
+    runtime = Runtime(idle_seconds=1.0, sweep_seconds=1e9, clock=clock)
+    runtime.register("trivial", Trivial)
+    await asyncio.gather(*(runtime.call(GrainId("trivial", str(n)), "ping") for n in range(grains)))
+    clock.now += 10.0
+
+    stalls: list[float] = []
+    beating = True
+
+    async def heartbeat() -> None:
+        last = time.perf_counter()
+        while beating:
+            await asyncio.sleep(0)
+            now = time.perf_counter()
+            stalls.append(now - last)
+            last = now
+
+    pulse = asyncio.create_task(heartbeat())
+    await asyncio.sleep(0)
+
+    started = time.perf_counter()
+    collected = await runtime.collect()
+    wall = time.perf_counter() - started
+
+    beating = False
+    await pulse
+    assert collected == grains, collected
+    return wall, max(stalls)
+
+
+class _Frozen:
+    """A clock the benchmark moves by hand, so a sweep needs no waiting."""
+
+    def __init__(self) -> None:
+        self.now = 0.0
+
+    def __call__(self) -> float:
+        return self.now
+
+
+async def throughput(grains: int = 1_000, per_grain: int = 100) -> float:
+    """Measures aggregate calls per second over a whole fleet at once.
+
+    Closer to what a job does than any single-grain figure: many identities,
+    many callers, everything in flight together.
+
+    Args:
+        grains: How many distinct grains.
+        per_grain: Calls to each.
+
+    Returns:
+        Calls per second.
+    """
+    runtime = Runtime()
+    runtime.register("hot", Hot)
+    ids = [GrainId("hot", str(n)) for n in range(grains)]
+    await asyncio.gather(*(runtime.call(grain_id, "touch") for grain_id in ids))
+
+    async def drive(grain_id: GrainId) -> None:
+        for _ in range(per_grain):
+            await runtime.call(grain_id, "touch")
+
+    started = time.perf_counter()
+    await asyncio.gather(*(drive(grain_id) for grain_id in ids))
+    return grains * per_grain / (time.perf_counter() - started)
+
+
 async def main() -> None:
     """Runs every measurement and prints it with the machine it was taken on."""
     print(f"python  {platform.python_version()}  {sys.platform}  {platform.processor()}")
@@ -256,6 +427,31 @@ async def main() -> None:
     burst = await herd()
     print("thundering herd, 1000 callers meeting one cold grain")
     print(f"  wall              {burst * 1000:8.1f} ms   (one activation, asserted)")
+    print()
+
+    print("dispatch against fleet size")
+    for size, seconds in await dispatch_at_scale():
+        print(f"  {size:>7,} activated  {seconds * 1e6:8.2f} us   {1 / seconds:12,.0f} calls/s")
+    print()
+
+    print("aggregate throughput, 1000 grains x 100 calls, all in flight")
+    print(f"  {await throughput():,.0f} calls/s")
+    print()
+
+    per_grain = await memory_per_activation()
+    print("keeping grains activated (the runtime's own bookkeeping)")
+    print(f"  per activation    {per_grain:8.0f} bytes")
+    print(f"  100k grains       {per_grain * 100_000 / 1024 / 1024:8.1f} MiB")
+    print()
+
+    swept, stall = await sweep_cost()
+    whole, whole_stall = await sweep_cost(chunk=10**9)
+    print("sweeping 100k idle grains")
+    print(f"  chunked      total {swept * 1000:7.1f} ms   longest stall {stall * 1000:7.2f} ms")
+    print(
+        f"  in one go    total {whole * 1000:7.1f} ms   longest stall {whole_stall * 1000:7.2f} ms"
+    )
+    print("  (the stall is what a caller waits; the total is what nobody waits for)")
     print()
 
     loop_noise = statistics.median(

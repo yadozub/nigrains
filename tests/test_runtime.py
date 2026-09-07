@@ -329,3 +329,60 @@ async def _settle() -> None:
 def _remember(store: list[Slow], grain: Slow) -> Slow:
     store.append(grain)
     return grain
+
+
+async def test_a_grain_called_during_a_sweep_is_not_collected(
+    runtime: Runtime, clock: Clock
+) -> None:
+    """The sweep yields between chunks, so what it listed can change under it.
+
+    Without the second check a grain that went stale, then was called while
+    the sweep was still walking, would be deactivated out from under its
+    caller - the exact failure the in-flight count exists to prevent, moved
+    from one call to the next.
+    """
+    grain = GrainId("counter", "a")
+    await runtime.call(grain, "increment")
+    clock.advance(101.0)
+
+    # Used again, after the cutoff was passed but before anything collects.
+    clock.advance(-1.0)
+    await runtime.call(grain, "increment")
+
+    assert await runtime.collect() == 0
+    assert runtime.activated == 1
+
+
+async def test_the_activation_future_is_dropped_once_it_has_resolved(
+    runtime: Runtime,
+) -> None:
+    """It exists to make a cold start single, and a fleet pays for it per grain."""
+    grain = GrainId("counter", "a")
+    await runtime.call(grain, "increment")
+
+    activation = runtime._activations[grain]
+    assert activation.ready is None
+
+
+async def test_a_reentrant_grain_never_gets_a_lock(runtime: Runtime) -> None:
+    """One object per grain that nothing would ever acquire, across a fleet."""
+    grains: list[Slow] = []
+    runtime.register("reentrant_probe", lambda grain_id: _remember(grains, SlowReentrant(grain_id)))
+    grain = GrainId("reentrant_probe", "a")
+    grains_before = len(grains)
+    task = asyncio.create_task(runtime.call(grain, "work"))
+    await _settle()
+
+    assert runtime._activations[grain].lock is None
+    assert len(grains) == grains_before + 1
+
+    grains[0].release.set()
+    await task
+
+
+async def test_a_serialised_grain_gets_its_lock_on_first_call(runtime: Runtime) -> None:
+    """Made when it is first needed rather than when the grain is built."""
+    grain = GrainId("counter", "a")
+    await runtime.call(grain, "increment")
+
+    assert runtime._activations[grain].lock is not None

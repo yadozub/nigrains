@@ -80,17 +80,18 @@ way. That is what makes the model affordable without a membership protocol.
 
 ## What it costs
 
-Measured, not asserted — `uv run python bench/bench.py`, and these are from
-one machine (Python 3.14, Windows, i7-13xxx), taken as floors over repeats.
-Read the shapes rather than the digits.
+Measured on Linux in a pinned container, every interpreter this package
+claims — full tables and how to reproduce them in
+[`BENCHMARKS.md`](BENCHMARKS.md). On Python 3.14:
 
 | | |
 |---|---|
-| `await grain.method()` directly | 0.05 µs |
-| `runtime.call(...)` on a hot grain | **1.13 µs** (883k calls/s) |
-| what addressing by identity costs | +1.08 µs, about ⅔ of an event-loop turn |
-| activating 1000 distinct grains at once | 5.5 ms, **5.5 µs each** |
-| 1000 callers meeting one cold grain | 4.1 ms, **one** activation |
+| `runtime.call` on a hot grain | **1.22 µs** (819k calls/s) |
+| the same with 100 000 grains activated | **1.29 µs** — flat |
+| aggregate, 1000 grains in flight | 801k calls/s |
+| activating 1000 cold grains | 5.4 µs each |
+| 1000 callers meeting one cold grain | **one** activation |
+| runtime bookkeeping per activation | 1058 B (101 MiB for 100k) |
 
 And the reentrancy claim, counted rather than timed — 200 concurrent callers
 on one grain:
@@ -101,14 +102,8 @@ on one grain:
 | reentrant | **200** |
 
 A microsecond of dispatch is noise beside anything a grain would realistically
-do — a query, a file, a model call. It is not noise beside nothing, so a grain
-whose method is a dictionary lookup is a grain that should not have been one.
-
-**One thing this benchmark got wrong first, kept here because it is a trap.**
-Overlap was originally measured with `asyncio.sleep(0.01)` and wall time,
-which on Windows measures the platform's timer: its default resolution is
-~15.6 ms, so the serialised grain scored *0.6x* — a number about the clock
-and not about the lock. Counting callers costs the same everywhere.
+do. It is not noise beside nothing, so a grain whose method is a dictionary
+lookup is a grain that should not have been one.
 
 ## Requirements
 

@@ -11,6 +11,8 @@ whether an activation has to be built first and when an idle one goes away.
 
 See :class:`~nigrains.runtime.Runtime` for what this node-local half does
 and, more importantly, what it does not.
+
+To my teacher and mentor, Vitaly Chashin.
 """
 
 import logging

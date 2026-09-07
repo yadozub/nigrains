@@ -1,5 +1,7 @@
 # nigrains
 
+*To my teacher and mentor, [Vitaly Chashin](https://github.com/VitalyChashin): called by name once -> answering ever since.*
+
 Virtual actors for asyncio. A grain has an identity rather than a lifetime:
 you call it, and the runtime decides whether an activation has to exist
 first and when an idle one goes away.
@@ -136,3 +138,7 @@ everything here that answers remembers the first call.
 ## Licence
 
 Apache-2.0.
+
+---
+
+*To my teacher and mentor, Vitaly Chashin.*

@@ -77,10 +77,23 @@ class _Activation:
 
     Attributes:
         grain: The behaviour.
-        ready: Completed once activate() has returned; every caller that
-            arrives during activation waits on it. **Set to None the moment
-            it resolves**: it exists to make a cold start single, and a
-            warm grain has no use for it.
+        ready: Set once activate() has finished, one way or the other. Every
+            caller arriving during activation waits on it, and it is dropped
+            the moment a *successful* activation is done, because a warm
+            grain has no use for it.
+
+            **An Event and not a Future, which is a fix and not a
+            preference.** A future is one object that every waiter awaits
+            directly, so cancelling any one waiting task cancels the future
+            itself - and with it the activation everybody else was waiting
+            for, plus an InvalidStateError in the coroutine that goes on to
+            resolve it. An asyncio.timeout around a call to a cold grain is
+            enough to cause it. Event.wait gives each waiter a future of its
+            own, so one caller giving up is one caller giving up. Found in
+            review, demonstrated rather than argued.
+        failure: What activate() raised, for waiters to read after the event
+            is set. It lives here because an Event, unlike a future, has
+            nowhere to carry it.
         lock: Held for the duration of a call when the grain is not
             reentrant. None both when the grain is reentrant and when it is
             not but has not yet been called - made on first use, which on
@@ -91,7 +104,7 @@ class _Activation:
         last_used: When the most recent call finished.
     """
 
-    __slots__ = ("grain", "in_flight", "last_used", "lock", "ready")
+    __slots__ = ("failure", "grain", "in_flight", "last_used", "lock", "ready")
 
     def __init__(self, grain: Grain, *, now: float) -> None:
         """Prepares an activation that has not run its hook yet.
@@ -101,7 +114,8 @@ class _Activation:
             now: The current time, from the runtime's clock.
         """
         self.grain = grain
-        self.ready: asyncio.Future[None] | None = asyncio.get_running_loop().create_future()
+        self.ready: asyncio.Event | None = asyncio.Event()
+        self.failure: BaseException | None = None
         self.lock: asyncio.Lock | None = None
         self.in_flight = 0
         self.last_used = now
@@ -211,15 +225,25 @@ class Runtime:
         Raises:
             GrainNotRegisteredError: No factory for that type.
         """
-        existing = self._activations.get(grain_id)
-        if existing is not None:
-            # Read once: the activating coroutine drops it the instant it
-            # resolves, and a caller that already holds the future awaits a
-            # completed one, which costs nothing.
+        while True:
+            existing = self._activations.get(grain_id)
+            if existing is None:
+                break
+            # Read once: a successful activation drops it the instant it is
+            # done, and a caller already waiting holds a future of its own.
             pending = existing.ready
-            if pending is not None:
-                await pending
-            return existing
+            if pending is None:
+                return existing
+            await pending.wait()
+            if existing.failure is None:
+                return existing
+            if isinstance(existing.failure, asyncio.CancelledError):
+                # Somebody else's cancellation, not this caller's. The entry
+                # is already gone, so going round builds a fresh activation
+                # rather than handing back a cancellation nobody asked for.
+                # This loop cannot spin: every turn of it awaits.
+                continue
+            raise existing.failure
 
         factory = self._factories.get(grain_id.type)
         if factory is None:
@@ -235,16 +259,15 @@ class Runtime:
             await activation.grain.activate()
         except BaseException as exc:
             # Nothing half-built is left behind: the entry goes, and the
-            # next call starts over. Every caller waiting sees the failure.
+            # next call starts over. Waiters see the failure, or retry when
+            # what failed was a cancellation.
             self._activations.pop(grain_id, None)
-            failed = activation.ready
-            if failed is not None:
-                failed.set_exception(exc)
-                # Somebody has to consume it if every waiter went away.
-                failed.exception()
+            activation.failure = exc
+            if activation.ready is not None:
+                activation.ready.set()
             raise
         if activation.ready is not None:
-            activation.ready.set_result(None)
+            activation.ready.set()
             activation.ready = None
         log.debug("activated %s", grain_id)
         return activation
@@ -271,12 +294,28 @@ class Runtime:
 
         **The walk is chunked and the idleness is checked twice**, and both
         are consequences of a fleet being large. A sweep of 100 000 idle
-        grains measured 57 ms, which is a stall the whole process pays while
-        nothing else runs; yielding every few thousand turns it into pauses
-        nobody notices. And once the sweep can be interrupted, a grain it
-        listed as stale can be called before the sweep reaches it - so what
-        was decided at the top of the walk is confirmed at the bottom,
-        rather than deactivating a grain somebody is using.
+        grains held the event loop for 79 ms in one block while nothing else
+        ran; yielding every few thousand turns that into pauses nobody
+        notices. And once the sweep can be interrupted, a grain it listed as
+        stale can be called before the sweep reaches it - so what was
+        decided at the top of the walk is confirmed at the bottom, rather
+        than deactivating a grain somebody is using.
+
+        **A grain that has not finished activating is never idle**, however
+        long it has been sitting there. Its call count is still zero and its
+        timestamp is the moment it was created, so an ``activate()`` slower
+        than the idle span used to look exactly like abandonment - and the
+        sweep would deactivate a grain whose own first caller was still
+        waiting for it, which is the failure the call count exists to
+        prevent, moved one step earlier. Found in review, by running it.
+
+        **One consequence worth knowing, because it is not prevented.** A
+        grain collected here while a fresh call is already building a new
+        activation of the same identity means two activations of one grain
+        exist for a moment - the old one finishing its ``deactivate()``, the
+        new one serving. Harmless for a grain that fronts something
+        immutable, which is what this model is good at. A grain holding an
+        exclusive resource must not assume otherwise.
 
         Returns:
             How many were collected.
@@ -285,12 +324,19 @@ class Runtime:
         stale = [
             grain_id
             for grain_id, activation in self._activations.items()
-            if activation.in_flight == 0 and activation.last_used <= cutoff
+            if activation.ready is None
+            and activation.in_flight == 0
+            and activation.last_used <= cutoff
         ]
         collected = 0
         for index, grain_id in enumerate(stale):
             activation = self._activations.get(grain_id)
-            if activation is None or activation.in_flight or activation.last_used > cutoff:
+            if (
+                activation is None
+                or activation.ready is not None
+                or activation.in_flight
+                or activation.last_used > cutoff
+            ):
                 continue
             await self._deactivate(grain_id)
             collected += 1

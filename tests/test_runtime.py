@@ -386,3 +386,86 @@ async def test_a_serialised_grain_gets_its_lock_on_first_call(runtime: Runtime) 
     await runtime.call(grain, "increment")
 
     assert runtime._activations[grain].lock is not None
+
+
+async def test_one_caller_giving_up_does_not_take_the_others_with_it(
+    runtime: Runtime,
+) -> None:
+    """The finding that held up publication, and the reason for an Event.
+
+    A shared future is one object that every waiter awaits directly, so
+    cancelling any one waiting task cancels the future - the activation
+    everybody else waited for, and an InvalidStateError in the coroutine
+    that goes on to resolve it. An `asyncio.timeout` around a call to a cold
+    grain is enough to do it, which makes this an ordinary Tuesday and not
+    an exotic interleaving.
+    """
+    SlowToActivate.started = 0
+    SlowToActivate.release = asyncio.Event()
+    grain = GrainId("slow_activate", "a")
+
+    first = asyncio.create_task(runtime.call(grain, "ping"))
+    waiters = [asyncio.create_task(runtime.call(grain, "ping")) for _ in range(3)]
+    await _settle()
+
+    waiters[0].cancel()
+    await asyncio.gather(waiters[0], return_exceptions=True)
+    SlowToActivate.release.set()
+
+    assert await first == "pong"
+    assert await waiters[1] == "pong"
+    assert await waiters[2] == "pong"
+    assert SlowToActivate.started == 1
+    # And the grain is still usable afterwards, rather than answering every
+    # later call with somebody else's cancellation.
+    assert await runtime.call(grain, "ping") == "pong"
+
+
+async def test_a_cancelled_activation_is_retried_rather_than_inherited(
+    runtime: Runtime,
+) -> None:
+    """A waiter must not be handed a cancellation it never asked for.
+
+    When the task that happened to start the activation is cancelled, the
+    others are not cancelled - they are waiting. Raising CancelledError at
+    them would be indistinguishable, to a TaskGroup or a timeout, from their
+    own cancellation.
+    """
+    SlowToActivate.started = 0
+    SlowToActivate.release = asyncio.Event()
+    grain = GrainId("slow_activate", "a")
+
+    first = asyncio.create_task(runtime.call(grain, "ping"))
+    await _settle()
+    second = asyncio.create_task(runtime.call(grain, "ping"))
+    await _settle()
+
+    first.cancel()
+    await asyncio.gather(first, return_exceptions=True)
+    SlowToActivate.release.set()
+
+    assert await second == "pong"
+    assert SlowToActivate.started == 2, "the second caller started its own activation"
+
+
+async def test_a_grain_still_activating_is_never_idle(runtime: Runtime, clock: Clock) -> None:
+    """The second finding: activation is not idleness.
+
+    A cold entry has no calls counted and a timestamp from the moment it was
+    created, so an activate() slower than the idle span looked exactly like
+    abandonment - and the sweep deactivated a grain whose own first caller
+    was still waiting for it.
+    """
+    SlowToActivate.started = 0
+    SlowToActivate.release = asyncio.Event()
+    grain = GrainId("slow_activate", "a")
+
+    call = asyncio.create_task(runtime.call(grain, "ping"))
+    await _settle()
+    clock.advance(1_000.0)
+
+    assert await runtime.collect() == 0
+    assert runtime.activated == 1
+
+    SlowToActivate.release.set()
+    assert await call == "pong"

@@ -5,21 +5,23 @@ interpreter this package claims. Two CPUs and 2 GiB, pinned, because a
 benchmark whose numbers move with whatever else the machine is doing measures
 the machine.
 
-Everything below is Linux (Debian bookworm-slim, container, 2 CPUs), taken as
-floors over repeats. Read the shapes, not the digits — the digits are this
-machine's.
+Everything below is Linux (Debian bookworm-slim, container, 2 CPUs). Each
+timing is **the fastest of several runs**, not a mean: a slower run measures
+whatever else the machine was doing at the time, and the question here is
+what the code costs when nothing is in its way. Read the shapes, not the
+digits — the digits are this machine's.
 
 ## Dispatch
 
 What addressing by identity costs, against a plain `await grain.method()` on
 a grain you already hold.
 
-| Python | direct | `runtime.call` | overhead |
+| Python | direct | `runtime.call` | throughput |
 |---|---|---|---|
-| 3.11 | 0.09 µs | 1.67 µs | 600k calls/s |
-| 3.12 | 0.08 µs | 1.38 µs | 727k calls/s |
-| 3.13 | 0.08 µs | 1.34 µs | 744k calls/s |
-| 3.14 | 0.08 µs | 1.22 µs | **819k calls/s** |
+| 3.11 | 0.12 µs | 1.70 µs | 588k calls/s |
+| 3.12 | 0.09 µs | 1.42 µs | 706k calls/s |
+| 3.13 | 0.08 µs | 1.32 µs | 756k calls/s |
+| 3.14 | 0.08 µs | 1.23 µs | **812k calls/s** |
 
 A little over a microsecond, which is roughly one event-loop turn. That is
 noise beside anything a grain would realistically do — a query, a file, a
@@ -31,12 +33,12 @@ premise of the whole model and therefore the thing most worth checking:
 
 | activated grains | 3.14 |
 |---|---|
-| 1 | 1.28 µs |
-| 1 000 | 1.27 µs |
-| 100 000 | 1.29 µs |
+| 1 | 1.27 µs |
+| 1 000 | 1.29 µs |
+| 100 000 | 1.30 µs |
 
 Aggregate over a whole fleet in flight at once — 1000 grains, 100 calls each
-— is 801k calls/s on 3.14, so nothing is lost by spreading the work out.
+— is 797k calls/s on 3.14, so nothing is lost by spreading the work out.
 
 ## Overlap
 
@@ -52,13 +54,18 @@ many were inside the method at the same moment.
 
 | | 3.11 | 3.14 |
 |---|---|---|
-| 1000 cold grains, called at once | 8.29 µs each | **5.39 µs each** |
-| 1000 callers meeting one cold grain | one activation, 4.3 ms | one activation, 4.3 ms |
-| runtime bookkeeping per activation | 1118 B | **1058 B** |
+| 1000 cold grains, called at once | 8.10 µs each | **5.42 µs each** |
+| 1000 callers meeting one cold grain | one activation | one activation |
+| runtime bookkeeping per activation | 1126 B | **1066 B** |
 
-A hundred thousand activated grains cost about **101 MiB** of the runtime's
+A hundred thousand activated grains cost about **102 MiB** of the runtime's
 own structures, before a grain holds anything of its own. That is the number
 to start from when asking how many one node can keep.
+
+**A grain still activating is never collected**, however long it has been
+sitting there — its call count is zero and its timestamp is the moment it was
+created, which used to look exactly like abandonment. A review found the
+sweep deactivating a grain whose own first caller was still waiting for it.
 
 ## Sweeping idle grains
 
@@ -67,8 +74,8 @@ and the two numbers say why:
 
 | 100 000 idle grains, 3.14 | total | longest stall |
 |---|---|---|
-| in one go | 79.3 ms | **79.4 ms** |
-| chunked (current) | 77.6 ms | **6.3 ms** |
+| in one go | 81.0 ms | **81.1 ms** |
+| chunked (current) | 83.6 ms | **6.9 ms** |
 
 The total is what nobody waits for. The stall is what a caller waits — one
 uninterrupted block with every other coroutine behind it. Chunking trades a

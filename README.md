@@ -60,10 +60,12 @@ grain always exists conceptually. Identity *is* the address.
 - **No supervision.** A failing call raises to its caller; a grain that
   fails to activate leaves nothing behind and the next call starts over.
   Restart policy belongs to whatever asked.
-- **No distribution yet.** This is the node-local half: one process, so
-  single activation is trivially true. A directory and a transport go in
-  front of `Runtime.call`, and nothing in calling code changes when they
-  arrive — which is the point of addressing by identity.
+- **No distribution yet.** This is the node-local half: **one `Runtime`**,
+  so single activation is trivially true within it. Two runtimes in one
+  process are two fleets, and an identity in both is two grains — which is
+  the honest boundary, and not the process. A directory and a transport go
+  in front of `Runtime.call`, and nothing in calling code changes when they
+  arrive; that is the point of addressing by identity.
 
 ## The guarantee it will offer, stated as a limit
 
@@ -86,12 +88,12 @@ claims — full tables and how to reproduce them in
 
 | | |
 |---|---|
-| `runtime.call` on a hot grain | **1.22 µs** (819k calls/s) |
-| the same with 100 000 grains activated | **1.29 µs** — flat |
-| aggregate, 1000 grains in flight | 801k calls/s |
+| `runtime.call` on a hot grain | **1.23 µs** (812k calls/s) |
+| the same with 100 000 grains activated | **1.30 µs** — flat |
+| aggregate, 1000 grains in flight | 797k calls/s |
 | activating 1000 cold grains | 5.4 µs each |
 | 1000 callers meeting one cold grain | **one** activation |
-| runtime bookkeeping per activation | 1058 B (101 MiB for 100k) |
+| runtime bookkeeping per activation | 1066 B (102 MiB for 100k) |
 
 And the reentrancy claim, counted rather than timed — 200 concurrent callers
 on one grain:
@@ -109,6 +111,27 @@ lookup is a grain that should not have been one.
 
 Python 3.11+ (that floor is `typing.Self`, and nothing else in here reaches
 past it). No dependencies. The suite runs on 3.11, 3.12, 3.13 and 3.14.
+
+## Dedication
+
+Everything here has a name rather than a lifetime:
+call it -> it wakes; forget it -> it cools.
+Once, someone called me by my name ->
+and I answered, and I have not cooled.
+
+I would not have arrived here alone.
+Someone walked beside me, not holding my hand:
+no ready answers -> only questions left behind,
+and waiting, however long, until I answered myself.
+
+A strictness that made me want to be more precise.
+A patience that made me dare more.
+There is no chapter for this in any documentation -> it is passed on only this way.
+
+To my teacher and mentor, Vitaly Chashin:
+everything here that answers remembers the first call.
+
+<https://github.com/VitalyChashin>
 
 ## Licence
 

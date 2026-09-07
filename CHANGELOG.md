@@ -1,0 +1,17 @@
+# Changelog
+
+## 0.1.0 — unreleased
+
+First cut: the node-local half of the runtime.
+
+- `Grain`, `GrainId` and `Runtime`: activation on demand by identity,
+  deactivation of idle grains, reentrancy declared per grain class.
+- Callers meeting a cold grain wait on one activation rather than starting
+  several.
+- A failed activation leaves nothing behind and reaches every waiting caller.
+- Idleness is measured from the last call to finish, so a grain answering a
+  slow call is never collected underneath its caller.
+
+Not here yet, and named in the README rather than implied away: persistence,
+supervision, and distribution. Single activation is trivially true while
+there is one node, and will be best effort when there is not.

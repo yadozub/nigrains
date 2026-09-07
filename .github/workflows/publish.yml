@@ -1,0 +1,26 @@
+# Publishes to PyPI on a tag, with no token anywhere.
+#
+# Trusted Publishing: PyPI verifies a short-lived OIDC token minted by this
+# workflow instead of a secret we would have to store, rotate and eventually
+# leak. It has to be configured once on PyPI as a pending publisher for the
+# project name, naming this repository and this workflow file.
+name: publish
+
+on:
+  push:
+    tags: ["v*"]
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    environment: pypi
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      # The tests run again here rather than trusting that the tag points at
+      # a commit `check` already passed: a tag can be moved.
+      - run: uv run pytest
+      - run: uv build
+      - uses: pypa/gh-action-pypi-publish@release/v1

@@ -80,7 +80,8 @@ way. That is what makes the model affordable without a membership protocol.
 
 ## Requirements
 
-Python 3.14+. No dependencies.
+Python 3.11+ (that floor is `typing.Self`, and nothing else in here reaches
+past it). No dependencies. The suite runs on 3.11, 3.12, 3.13 and 3.14.
 
 ## Licence
 

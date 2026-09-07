@@ -27,6 +27,12 @@ classifiers = [
 # a port, and never as a hard requirement.
 dependencies = []
 
+[project.urls]
+Homepage = "https://github.com/yadozub/nigrains"
+Source = "https://github.com/yadozub/nigrains"
+Issues = "https://github.com/yadozub/nigrains/issues"
+Changelog = "https://github.com/yadozub/nigrains/blob/main/CHANGELOG.md"
+
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"

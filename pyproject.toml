@@ -70,6 +70,8 @@ convention = "google"
 # the behaviour. The tests themselves keep D103 where they have something to
 # say, and say it.
 "tests/*" = ["ANN401", "D101", "D102", "D103", "D105", "D107", "D205"]
+# The benchmark's grains are one-line props whose names say what they are.
+"bench/*" = ["D101", "D102", "D107"]
 
 [tool.mypy]
 python_version = "3.11"

@@ -19,10 +19,10 @@ longer than the configured span. Idleness is measured from the last call to
 runtime that collected it would deactivate underneath its own caller.
 
 **There is no directory and no transport**, so every grain is here and
-single activation is trivially true. Distribution is a later task (T3.10),
-and the shape it will take is a directory in front of :meth:`Runtime.call`
-that either dispatches locally, as now, or forwards. Nothing in the calling
-code changes when it arrives, which is the point of addressing by identity.
+single activation is trivially true. Distribution goes in front of
+:meth:`Runtime.call` as a directory that either dispatches locally, as now,
+or forwards. Nothing in the calling code changes when it arrives, which is
+the point of addressing by identity.
 
 **There is no persistence and no supervision.** A grain that fails a call
 raises to its caller and stays activated; a grain that fails to activate

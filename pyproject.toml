@@ -27,9 +27,6 @@ classifiers = [
 # a port, and never as a hard requirement.
 dependencies = []
 
-[project.urls]
-Source = "https://github.com/ilyevich/nigrains"
-
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"

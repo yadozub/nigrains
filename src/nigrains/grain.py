@@ -65,10 +65,18 @@ class Grain:
 
     Attributes:
         id: This activation's identity.
+        grain_type: The kind this class answers for - the first half of
+            every identity addressed to it, and a **wire identifier**: it
+            travels in a message and, once there is a cluster, between
+            machines. Declared rather than derived from the class name,
+            because renaming a class is a refactor and renaming an address
+            is a migration, and a default would make them the same
+            keystroke.
         reentrant: Whether calls may overlap. Default False, matching the
             model rather than matching our commonest grain.
     """
 
+    grain_type: ClassVar[str] = ""
     reentrant: ClassVar[bool] = False
 
     def __init__(self, grain_id: GrainId) -> None:

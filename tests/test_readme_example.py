@@ -8,10 +8,12 @@ first five minutes.
 
 from __future__ import annotations
 
-from nigrains import Grain, GrainId, Runtime
+from nigrains import Grain, Runtime
 
 
 class Counter(Grain):
+    grain_type = "counter"
+
     async def activate(self) -> None:
         self.count = 0
 
@@ -22,9 +24,10 @@ class Counter(Grain):
 
 async def test_the_readme_example_does_what_it_says() -> None:
     runtime = Runtime()
-    runtime.register("counter", Counter)
+    runtime.register(Counter)
 
     async with runtime:
-        assert await runtime.call(GrainId("counter", "a"), "increment") == 1
-        assert await runtime.call(GrainId("counter", "a"), "increment") == 2
-        assert await runtime.call(GrainId("counter", "b"), "increment") == 1
+        first = runtime.reference(Counter, "a")
+        assert await first.increment() == 1
+        assert await first.increment() == 2
+        assert await runtime.reference(Counter, "b").increment() == 1

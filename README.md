@@ -7,10 +7,12 @@ you call it, and the runtime decides whether an activation has to exist
 first and when an idle one goes away.
 
 ```python
-from nigrains import Grain, GrainId, Runtime
+from nigrains import Grain, Runtime
 
 
 class Counter(Grain):
+    grain_type = "counter"
+
     async def activate(self) -> None:
         self.count = 0
 
@@ -20,17 +22,27 @@ class Counter(Grain):
 
 
 runtime = Runtime()
-runtime.register("counter", Counter)
+runtime.register(Counter)
 
 async with runtime:
-    await runtime.call(GrainId("counter", "a"), "increment")  # 1
-    await runtime.call(GrainId("counter", "a"), "increment")  # 2
-    await runtime.call(GrainId("counter", "b"), "increment")  # 1
+    a = runtime.reference(Counter, "a")
+    await a.increment()  # 1
+    await a.increment()  # 2
+    await runtime.reference(Counter, "b").increment()  # 1
 ```
 
 No registry to populate, no handle to keep, no create and no destroy. The
 second call finds the activation the first built; the third builds its own,
 because the key differs.
+
+**A reference is an address, not the object.** It activates nothing when you
+make one, and it is typed as the grain, so a type checker reads
+`a.increment()` against `Counter.increment` and a renamed method fails where
+it is named. What it is not is an instance: `isinstance` says so, state is
+not readable through it, and the grain it names may be cold, or on another
+machine, or activated twice. Underneath, the call is still a method name and
+a tuple — `runtime.call(...)` is there for the callers that need that shape,
+which is transports and very little else.
 
 ## Why this rather than an actor library
 
@@ -90,9 +102,10 @@ claims — full tables and how to reproduce them in
 
 | | |
 |---|---|
-| `runtime.call` on a hot grain | **1.23 µs** (812k calls/s) |
-| the same with 100 000 grains activated | **1.30 µs** — flat |
-| aggregate, 1000 grains in flight | 797k calls/s |
+| `runtime.call` on a hot grain | **1.23 µs** (815k calls/s) |
+| the same through a typed reference | **1.51 µs** |
+| the same with 100 000 grains activated | **1.31 µs** — flat |
+| aggregate, 1000 grains in flight | 790k calls/s |
 | activating 1000 cold grains | 5.4 µs each |
 | 1000 callers meeting one cold grain | **one** activation |
 | runtime bookkeeping per activation | 1066 B (102 MiB for 100k) |

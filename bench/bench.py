@@ -50,6 +50,8 @@ between.
 class Hot(Grain):
     """Answers immediately. Isolates dispatch from everything else."""
 
+    grain_type = "hot"
+
     reentrant = True
 
     async def touch(self) -> int:
@@ -62,6 +64,8 @@ class Serial(Grain):
     Records the highest number of callers that were inside at once, which is
     the claim itself rather than a proxy for it.
     """
+
+    grain_type = "serial"
 
     def __init__(self, grain_id: GrainId) -> None:
         super().__init__(grain_id)
@@ -79,11 +83,15 @@ class Serial(Grain):
 class Parallel(Serial):
     """The same, declaring that overlap is fine."""
 
+    grain_type = "parallel"
+
     reentrant = True
 
 
 class Trivial(Grain):
     """Costs nothing to activate, so activation measures the runtime."""
+
+    grain_type = "trivial"
 
     async def ping(self) -> int:
         return 1
@@ -110,18 +118,20 @@ async def _timed(work: Callable[[], Awaitable[None]], *, repeats: int = 5) -> fl
     return min(times)
 
 
-async def dispatch_overhead(calls: int = 100_000) -> tuple[float, float]:
+async def dispatch_overhead(calls: int = 100_000) -> tuple[float, float, float]:
     """Compares a call through the runtime with a direct await.
 
     Args:
         calls: How many calls per run.
 
     Returns:
-        Seconds per direct call, and seconds per dispatched call.
+        Seconds per direct await, per dispatched call, and per call through
+        a typed reference - the last being what the README recommends, so
+        what it costs is worth knowing rather than assuming.
     """
     runtime = Runtime()
-    runtime.register("hot", Hot)
-    grain_id = GrainId("hot", "a")
+    runtime.register(Hot)
+    grain_id = GrainId(Hot.grain_type, "a")
     await runtime.call(grain_id, "touch")  # warm: activation is not the subject
 
     direct = Hot(grain_id)
@@ -134,7 +144,17 @@ async def dispatch_overhead(calls: int = 100_000) -> tuple[float, float]:
         for _ in range(calls):
             await runtime.call(grain_id, "touch")
 
-    return await _timed(bare) / calls, await _timed(dispatched) / calls
+    reference = runtime.reference(Hot, "a")
+
+    async def referred() -> None:
+        for _ in range(calls):
+            await reference.touch()
+
+    return (
+        await _timed(bare) / calls,
+        await _timed(dispatched) / calls,
+        await _timed(referred) / calls,
+    )
 
 
 async def overlap(callers: int = 200) -> dict[str, tuple[int, float]]:
@@ -165,8 +185,8 @@ async def overlap(callers: int = 200) -> dict[str, tuple[int, float]]:
             return grain
 
         runtime = Runtime()
-        runtime.register(kind, build)
-        grain_id = GrainId(kind, "a")
+        runtime.register(behaviour, build)
+        grain_id = GrainId(behaviour.grain_type, "a")
         await runtime.call(grain_id, "work")
         probes[0].peak = 0
 
@@ -186,10 +206,12 @@ async def cold_fleet(grains: int = 1_000) -> tuple[float, float]:
         Seconds for the burst, and microseconds per activation.
     """
     runtime = Runtime()
-    runtime.register("trivial", Trivial)
+    runtime.register(Trivial)
 
     started = time.perf_counter()
-    await asyncio.gather(*(runtime.call(GrainId("trivial", str(n)), "ping") for n in range(grains)))
+    await asyncio.gather(
+        *(runtime.call(GrainId(Trivial.grain_type, str(n)), "ping") for n in range(grains))
+    )
     wall = time.perf_counter() - started
     assert runtime.activated == grains
     return wall, wall / grains * 1e6
@@ -207,6 +229,7 @@ async def herd(callers: int = 1_000) -> float:
     activations = 0
 
     class Counted(Grain):
+        grain_type = "counted"
         reentrant = True
 
         async def activate(self) -> None:
@@ -219,8 +242,8 @@ async def herd(callers: int = 1_000) -> float:
             return 1
 
     runtime = Runtime()
-    runtime.register("counted", Counted)
-    grain_id = GrainId("counted", "a")
+    runtime.register(Counted)
+    grain_id = GrainId(Counted.grain_type, "a")
 
     started = time.perf_counter()
     await asyncio.gather(*(runtime.call(grain_id, "ping") for _ in range(callers)))
@@ -249,9 +272,11 @@ async def dispatch_at_scale(
     results = []
     for size in fleet:
         runtime = Runtime()
-        runtime.register("hot", Hot)
-        await asyncio.gather(*(runtime.call(GrainId("hot", str(n)), "touch") for n in range(size)))
-        target = GrainId("hot", str(size - 1))
+        runtime.register(Hot)
+        await asyncio.gather(
+            *(runtime.call(GrainId(Hot.grain_type, str(n)), "touch") for n in range(size))
+        )
+        target = GrainId(Hot.grain_type, str(size - 1))
 
         async def hammer(grain_id: GrainId = target, on: Runtime = runtime) -> None:
             for _ in range(calls):
@@ -276,12 +301,14 @@ async def memory_per_activation(grains: int = 100_000) -> float:
         Bytes per activation.
     """
     runtime = Runtime()
-    runtime.register("trivial", Trivial)
+    runtime.register(Trivial)
 
     gc.collect()
     tracemalloc.start()
     before = tracemalloc.get_traced_memory()[0]
-    await asyncio.gather(*(runtime.call(GrainId("trivial", str(n)), "ping") for n in range(grains)))
+    await asyncio.gather(
+        *(runtime.call(GrainId(Trivial.grain_type, str(n)), "ping") for n in range(grains))
+    )
     # Without this the reading includes 100 000 finished tasks the gather
     # has not let go of yet, and calls them the cost of an activation. The
     # first version of this measurement did exactly that.
@@ -332,8 +359,10 @@ async def _swept(grains: int) -> tuple[float, float]:
     """
     clock = _Frozen()
     runtime = Runtime(idle_seconds=1.0, sweep_seconds=1e9, clock=clock)
-    runtime.register("trivial", Trivial)
-    await asyncio.gather(*(runtime.call(GrainId("trivial", str(n)), "ping") for n in range(grains)))
+    runtime.register(Trivial)
+    await asyncio.gather(
+        *(runtime.call(GrainId(Trivial.grain_type, str(n)), "ping") for n in range(grains))
+    )
     clock.now += 10.0
 
     stalls: list[float] = []
@@ -384,8 +413,8 @@ async def throughput(grains: int = 1_000, per_grain: int = 100) -> float:
         Calls per second.
     """
     runtime = Runtime()
-    runtime.register("hot", Hot)
-    ids = [GrainId("hot", str(n)) for n in range(grains)]
+    runtime.register(Hot)
+    ids = [GrainId(Hot.grain_type, str(n)) for n in range(grains)]
     await asyncio.gather(*(runtime.call(grain_id, "touch") for grain_id in ids))
 
     async def drive(grain_id: GrainId) -> None:
@@ -402,11 +431,13 @@ async def main() -> None:
     print(f"python  {platform.python_version()}  {sys.platform}  {platform.processor()}")
     print()
 
-    bare, dispatched = await dispatch_overhead()
+    bare, dispatched, referred = await dispatch_overhead()
     print("dispatch, hot reentrant grain")
     print(f"  direct await      {bare * 1e6:8.2f} us   {1 / bare:12,.0f} calls/s")
     print(f"  runtime.call      {dispatched * 1e6:8.2f} us   {1 / dispatched:12,.0f} calls/s")
+    print(f"  reference.method  {referred * 1e6:8.2f} us   {1 / referred:12,.0f} calls/s")
     print(f"  overhead          {(dispatched - bare) * 1e6:8.2f} us   x{dispatched / bare:.1f}")
+    print(f"  reference adds    {(referred - dispatched) * 1e6:8.2f} us")
     print()
 
     measured = await overlap()

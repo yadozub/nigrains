@@ -42,6 +42,7 @@ from typing import Any, Self
 
 from nigrains.errors import GrainNotRegisteredError, NoSuchGrainMethodError
 from nigrains.grain import Grain, GrainId
+from nigrains.reference import G, reference_to
 
 log = logging.getLogger(__name__)
 """Named after the module, with no handler and no level.
@@ -53,6 +54,12 @@ takes, and structured logging is the application's choice to make.
 
 GrainFactory = Callable[[GrainId], Grain]
 """How a registered kind is built. Takes the identity, returns the behaviour."""
+
+_DRAIN_POLL = 0.05
+"""Seconds between checks while waiting for calls in flight to finish.
+
+Short enough that a fast shutdown is not made slow by the polling, long
+enough that a slow one does not spin."""
 
 _SWEEP_CHUNK = 1_000
 """Activations collected between yields to the event loop.
@@ -137,6 +144,7 @@ class Runtime:
         *,
         idle_seconds: float = 300.0,
         sweep_seconds: float = 30.0,
+        drain_seconds: float = 30.0,
         clock: Callable[[], float] = time.monotonic,
     ) -> None:
         """Builds an empty runtime.
@@ -144,30 +152,65 @@ class Runtime:
         Args:
             idle_seconds: A grain uncalled for this long is deactivated.
             sweep_seconds: Interval between collections.
+            drain_seconds: How long leaving the runtime waits for calls in
+                flight before deactivating anyway. Zero deactivates at once,
+                which is what a process being killed wants and what a
+                process shutting down does not.
             clock: Monotonic source of the current time.
         """
         self._factories: dict[str, GrainFactory] = {}
         self._activations: dict[GrainId, _Activation] = {}
         self._idle_seconds = idle_seconds
         self._sweep_seconds = sweep_seconds
+        self._drain_seconds = drain_seconds
         self._clock = clock
         self._sweeper: asyncio.Task[None] | None = None
 
-    def register(self, grain_type: str, factory: GrainFactory) -> None:
+    def register(self, grain: type[Grain], factory: GrainFactory | None = None) -> None:
         """Teaches the runtime how to build one kind of grain.
 
+        **The class is the argument and the name comes off it**, because a
+        name given here and a name looked up there are two sources of truth
+        for one address, and a typed reference has to be able to find the
+        second from the first.
+
         Args:
-            grain_type: The name identities of this kind carry.
-            factory: Builds the behaviour from an identity.
+            grain: The grain class. Its ``grain_type`` is the name identities
+                of this kind carry.
+            factory: Builds the behaviour from an identity. Defaults to the
+                class itself, which is right whenever the constructor wants
+                nothing but the identity.
 
         Raises:
-            ValueError: That name is already registered. Silently replacing
-                it would leave activations of the old kind answering calls
+            ValueError: The class declares no ``grain_type``, or that name
+                is already registered. Silently replacing a registration
+                would leave activations of the old kind answering calls
                 meant for the new one.
         """
+        grain_type = grain.grain_type
+        if not grain_type:
+            raise ValueError(f"{grain.__name__} declares no grain_type, so it has no address")
         if grain_type in self._factories:
             raise ValueError(f"grain type {grain_type!r} is already registered")
-        self._factories[grain_type] = factory
+        self._factories[grain_type] = factory if factory is not None else grain
+
+    def reference(self, grain: type[G], key: str) -> G:
+        """Returns a reference to one grain, typed as that grain.
+
+        The way to call a grain when the caller knows what kind it is, which
+        is nearly always. :meth:`call` remains for the cases that do not -
+        a transport forwarding a message it did not compose.
+
+        Args:
+            grain: The grain class, supplying the address and the signatures.
+            key: Which grain of that kind.
+
+        Returns:
+            Something answering the grain's coroutine methods, typed as the
+            grain. See :mod:`nigrains.reference` for what that annotation
+            does and does not promise.
+        """
+        return reference_to(self, grain, key)
 
     async def call(
         self,
@@ -397,8 +440,33 @@ class Runtime:
             with suppress(asyncio.CancelledError):
                 await self._sweeper
             self._sweeper = None
+        await self._drain()
         for grain_id in list(self._activations):
             await self._deactivate(grain_id)
+
+    async def _drain(self) -> None:
+        """Waits for calls in flight, up to the shutdown grace.
+
+        **The sweep already refuses to collect a grain that is answering,
+        and leaving the runtime used not to**, which put the same failure at
+        the one moment it is most likely: a process stopping in the middle
+        of work ran every ``deactivate()`` under a running call. Found by
+        reading the two paths next to each other rather than by a test,
+        which is why there is now a test.
+
+        The wait is bounded. A grain that never finishes must not be able to
+        stop a process from stopping, so after the grace the deactivation
+        goes ahead and says so.
+        """
+        deadline = self._clock() + self._drain_seconds
+        while self._clock() < deadline:
+            busy = sum(1 for activation in self._activations.values() if activation.in_flight)
+            if not busy:
+                return
+            await asyncio.sleep(_DRAIN_POLL)
+        still_busy = sum(1 for activation in self._activations.values() if activation.in_flight)
+        if still_busy:
+            log.warning("deactivating %d grains with calls still in flight", still_busy)
 
     async def _sweep(self) -> None:
         """Collects idle grains until cancelled."""

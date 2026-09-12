@@ -5,9 +5,9 @@ creates one and never destroys one: it calls one, and the runtime decides
 whether an activation has to be built first and when an idle one goes away.
 
     runtime = Runtime()
-    runtime.register("counter", Counter)
+    runtime.register(Counter)
     async with runtime:
-        await runtime.call(GrainId("counter", "a"), "increment")
+        await runtime.reference(Counter, "a").increment()
 
 See :class:`~nigrains.runtime.Runtime` for what this node-local half does
 and, more importantly, what it does not.

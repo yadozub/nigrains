@@ -31,6 +31,8 @@ class Clock:
 class Counter(Grain):
     """Keeps a number, and records what the runtime did to it."""
 
+    grain_type = "counter"
+
     activations = 0
     deactivations = 0
 
@@ -52,12 +54,18 @@ class Counter(Grain):
 class Slow(Grain):
     """Answers only when released, so overlap can be arranged exactly."""
 
+    grain_type = "slow"
+
     def __init__(self, grain_id: GrainId) -> None:
         super().__init__(grain_id)
         self.entered = asyncio.Event()
         self.release = asyncio.Event()
         self.concurrent = 0
         self.peak = 0
+        self.deactivated_while_busy = False
+
+    async def deactivate(self) -> None:
+        self.deactivated_while_busy = self.concurrent > 0
 
     async def work(self) -> None:
         self.concurrent += 1
@@ -70,11 +78,31 @@ class Slow(Grain):
 class SlowReentrant(Slow):
     """The same, but declaring that overlap is fine."""
 
+    grain_type = "slow_reentrant"
+
     reentrant = True
+
+
+class SlowProbe(Slow):
+    """A serialised grain under its own address, so a test can hold it.
+
+    One class is one address now, so a test wanting a handle on the
+    activation registers a kind of its own rather than the same class twice.
+    """
+
+    grain_type = "slow_probe"
+
+
+class ReentrantProbe(SlowReentrant):
+    """The reentrant half of the same arrangement."""
+
+    grain_type = "reentrant_probe"
 
 
 class SlowToActivate(Grain):
     """Blocks in activate() until let go."""
+
+    grain_type = "slow_activate"
 
     started = 0
     release = asyncio.Event()
@@ -89,6 +117,8 @@ class SlowToActivate(Grain):
 
 class Broken(Grain):
     """Refuses to activate."""
+
+    grain_type = "broken"
 
     attempts = 0
 
@@ -110,11 +140,11 @@ def runtime(clock: Clock) -> Runtime:
     Counter.activations = 0
     Counter.deactivations = 0
     built = Runtime(idle_seconds=100.0, sweep_seconds=1000.0, clock=clock)
-    built.register("counter", Counter)
-    built.register("slow", Slow)
-    built.register("slow_reentrant", SlowReentrant)
-    built.register("slow_activate", SlowToActivate)
-    built.register("broken", Broken)
+    built.register(Counter)
+    built.register(Slow)
+    built.register(SlowReentrant)
+    built.register(SlowToActivate)
+    built.register(Broken)
     return built
 
 
@@ -181,8 +211,8 @@ async def test_a_failed_activation_reaches_every_waiting_caller(runtime: Runtime
 async def test_a_non_reentrant_grain_runs_one_call_at_a_time(runtime: Runtime) -> None:
     """The model's default, and what lets grain state need no lock."""
     grains: list[Slow] = []
-    runtime.register("slow_probe", lambda grain_id: _remember(grains, Slow(grain_id)))
-    grain = GrainId("slow_probe", "a")
+    runtime.register(SlowProbe, lambda grain_id: _remember(grains, SlowProbe(grain_id)))
+    grain = GrainId(SlowProbe.grain_type, "a")
 
     calls = [asyncio.create_task(runtime.call(grain, "work")) for _ in range(3)]
     await _settle()
@@ -202,8 +232,8 @@ async def test_a_reentrant_grain_lets_its_callers_overlap(runtime: Runtime) -> N
     another for no reason but a lock nobody needed.
     """
     grains: list[Slow] = []
-    runtime.register("reentrant_probe", lambda grain_id: _remember(grains, SlowReentrant(grain_id)))
-    grain = GrainId("reentrant_probe", "a")
+    runtime.register(ReentrantProbe, lambda grain_id: _remember(grains, ReentrantProbe(grain_id)))
+    grain = GrainId(ReentrantProbe.grain_type, "a")
 
     calls = [asyncio.create_task(runtime.call(grain, "work")) for _ in range(3)]
     await _settle()
@@ -252,8 +282,8 @@ async def test_a_grain_still_answering_is_not_idle(runtime: Runtime, clock: Cloc
     never deactivated underneath its own caller.
     """
     grains: list[Slow] = []
-    runtime.register("slow_probe", lambda grain_id: _remember(grains, Slow(grain_id)))
-    call = asyncio.create_task(runtime.call(GrainId("slow_probe", "a"), "work"))
+    runtime.register(SlowProbe, lambda grain_id: _remember(grains, SlowProbe(grain_id)))
+    call = asyncio.create_task(runtime.call(GrainId(SlowProbe.grain_type, "a"), "work"))
     await _settle()
     clock.advance(1000.0)
 
@@ -279,7 +309,7 @@ async def test_leaving_the_runtime_deactivates_everything(clock: Clock) -> None:
     Counter.activations = 0
     Counter.deactivations = 0
     runtime = Runtime(idle_seconds=100.0, sweep_seconds=1000.0, clock=clock)
-    runtime.register("counter", Counter)
+    runtime.register(Counter)
 
     async with runtime:
         await runtime.call(GrainId("counter", "a"), "increment")
@@ -293,13 +323,15 @@ async def test_a_grain_that_cannot_tidy_up_still_goes(runtime: Runtime, clock: C
     """A failing deactivate() must not let a grain keep itself alive."""
 
     class Stubborn(Grain):
+        grain_type = "stubborn"
+
         async def deactivate(self) -> None:
             raise RuntimeError("no")
 
         async def ping(self) -> str:
             return "pong"
 
-    runtime.register("stubborn", Stubborn)
+    runtime.register(Stubborn)
     await runtime.call(GrainId("stubborn", "a"), "ping")
     clock.advance(101.0)
 
@@ -312,7 +344,7 @@ async def test_registering_a_kind_twice_is_refused(runtime: Runtime) -> None:
     answering calls meant for the new one.
     """
     with pytest.raises(ValueError, match="counter"):
-        runtime.register("counter", Counter)
+        runtime.register(Counter)
 
 
 async def _settle() -> None:
@@ -367,8 +399,8 @@ async def test_the_activation_future_is_dropped_once_it_has_resolved(
 async def test_a_reentrant_grain_never_gets_a_lock(runtime: Runtime) -> None:
     """One object per grain that nothing would ever acquire, across a fleet."""
     grains: list[Slow] = []
-    runtime.register("reentrant_probe", lambda grain_id: _remember(grains, SlowReentrant(grain_id)))
-    grain = GrainId("reentrant_probe", "a")
+    runtime.register(ReentrantProbe, lambda grain_id: _remember(grains, ReentrantProbe(grain_id)))
+    grain = GrainId(ReentrantProbe.grain_type, "a")
     grains_before = len(grains)
     task = asyncio.create_task(runtime.call(grain, "work"))
     await _settle()
@@ -469,3 +501,117 @@ async def test_a_grain_still_activating_is_never_idle(runtime: Runtime, clock: C
 
     SlowToActivate.release.set()
     assert await call == "pong"
+
+
+async def test_a_reference_calls_the_grain_it_names(runtime: Runtime) -> None:
+    """The ordinary way to call a grain, and what a type checker sees."""
+    counter = runtime.reference(Counter, "a")
+
+    assert await counter.increment() == 1
+    assert await counter.increment() == 2
+    assert await runtime.reference(Counter, "b").increment() == 1
+
+
+async def test_a_reference_holds_nothing_and_activates_nothing(runtime: Runtime) -> None:
+    """Making one is an address, not a handle."""
+    counter = runtime.reference(Counter, "a")
+    assert runtime.activated == 0
+
+    await counter.increment()
+    assert runtime.activated == 1
+
+
+async def test_a_method_that_is_not_there_fails_where_it_is_named(runtime: Runtime) -> None:
+    """The point of a reference: the failure lands on the line, not in the call.
+
+    A renamed grain method is otherwise a runtime error at whatever moment
+    the caller happens to run, which on a fleet is the worst moment.
+    """
+    counter = runtime.reference(Counter, "a")
+
+    with pytest.raises(NoSuchGrainMethodError, match="decrement"):
+        # The type checker flags this line, which is the guarantee working:
+        # a reference is typed as the grain, so a method that does not exist
+        # is caught before anything runs. The test is here for the callers
+        # who are not type-checked, and for the ones who ignore it.
+        counter.decrement  # type: ignore[attr-defined]  # noqa: B018
+
+
+async def test_state_is_not_readable_through_a_reference(runtime: Runtime) -> None:
+    """`count` is state, and state does not travel; only calls do."""
+    await runtime.call(GrainId(Counter.grain_type, "a"), "increment")
+    counter = runtime.reference(Counter, "a")
+
+    with pytest.raises(NoSuchGrainMethodError):
+        counter.count  # noqa: B018
+
+
+async def test_a_private_method_is_not_reachable_through_a_reference(runtime: Runtime) -> None:
+    """A reference is a call from outside, and one day from off this node."""
+    counter = runtime.reference(Counter, "a")
+
+    with pytest.raises(NoSuchGrainMethodError):
+        counter._private  # noqa: B018
+
+
+async def test_a_grain_without_an_address_is_refused_at_both_ends() -> None:
+    """A wire identifier is declared, never derived, so its absence is an error."""
+
+    class Anonymous(Grain):
+        async def ping(self) -> str:
+            return "pong"
+
+    with pytest.raises(ValueError, match="grain_type"):
+        Runtime().reference(Anonymous, "a")
+    with pytest.raises(ValueError, match="grain_type"):
+        Runtime().register(Anonymous)
+
+
+async def test_a_grain_is_its_own_factory_when_it_wants_only_an_identity(
+    clock: Clock,
+) -> None:
+    """Most grains take nothing else, and saying so twice is noise."""
+    Counter.activations = 0
+    built = Runtime(idle_seconds=100.0, sweep_seconds=1000.0, clock=clock)
+    built.register(Counter)
+
+    assert await built.reference(Counter, "a").increment() == 1
+
+
+async def test_leaving_waits_for_a_call_still_in_flight() -> None:
+    """The sweep refuses to collect a busy grain; leaving used not to.
+
+    That put the failure the in-flight count exists to prevent at the one
+    moment it is most likely - a process stopping in the middle of work -
+    and ran every deactivate() under a running call.
+    """
+    grains: list[Slow] = []
+    runtime = Runtime(idle_seconds=100.0, sweep_seconds=1000.0, drain_seconds=5.0)
+    runtime.register(SlowProbe, lambda grain_id: _remember(grains, SlowProbe(grain_id)))
+
+    async with runtime:
+        call = asyncio.create_task(runtime.call(GrainId(SlowProbe.grain_type, "a"), "work"))
+        await _settle()
+        assert grains[0].concurrent == 1
+        grains[0].release.set()
+        await call
+
+    assert grains[0].deactivated_while_busy is False
+
+
+async def test_leaving_does_not_wait_for_ever() -> None:
+    """A grain that never finishes must not stop a process from stopping."""
+    grains: list[Slow] = []
+    runtime = Runtime(idle_seconds=100.0, sweep_seconds=1000.0, drain_seconds=0.0)
+    runtime.register(SlowProbe, lambda grain_id: _remember(grains, SlowProbe(grain_id)))
+
+    call = asyncio.create_task(runtime.call(GrainId(SlowProbe.grain_type, "a"), "work"))
+    await _settle()
+
+    async with runtime:
+        pass
+
+    assert runtime.activated == 0
+    assert grains[0].deactivated_while_busy is True
+    grains[0].release.set()
+    await call

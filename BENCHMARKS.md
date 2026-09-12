@@ -16,12 +16,17 @@ digits — the digits are this machine's.
 What addressing by identity costs, against a plain `await grain.method()` on
 a grain you already hold.
 
-| Python | direct | `runtime.call` | throughput |
+| Python | direct await | `runtime.call` | `reference.method()` |
 |---|---|---|---|
-| 3.11 | 0.12 µs | 1.70 µs | 588k calls/s |
-| 3.12 | 0.09 µs | 1.42 µs | 706k calls/s |
-| 3.13 | 0.08 µs | 1.32 µs | 756k calls/s |
-| 3.14 | 0.08 µs | 1.23 µs | **812k calls/s** |
+| 3.11 | 0.12 µs | 1.69 µs | 2.16 µs |
+| 3.12 | 0.10 µs | 1.42 µs | 1.78 µs |
+| 3.13 | 0.08 µs | 1.33 µs | 1.68 µs |
+| 3.14 | 0.08 µs | **1.23 µs** | **1.51 µs** |
+
+A typed reference costs about 0.3 µs more than the raw call. It resolves a
+method name against the class once and caches the caller on the reference,
+so the price is one extra `await` layer rather than a lookup per call —
+resolving it per call measured 2.30 µs against 1.23, which is why it does not.
 
 A little over a microsecond, which is roughly one event-loop turn. That is
 noise beside anything a grain would realistically do — a query, a file, a
@@ -33,12 +38,12 @@ premise of the whole model and therefore the thing most worth checking:
 
 | activated grains | 3.14 |
 |---|---|
-| 1 | 1.27 µs |
-| 1 000 | 1.29 µs |
-| 100 000 | 1.30 µs |
+| 1 | 1.26 µs |
+| 1 000 | 1.28 µs |
+| 100 000 | 1.31 µs |
 
 Aggregate over a whole fleet in flight at once — 1000 grains, 100 calls each
-— is 797k calls/s on 3.14, so nothing is lost by spreading the work out.
+— is 790k calls/s on 3.14, so nothing is lost by spreading the work out.
 
 ## Overlap
 
@@ -54,7 +59,7 @@ many were inside the method at the same moment.
 
 | | 3.11 | 3.14 |
 |---|---|---|
-| 1000 cold grains, called at once | 8.10 µs each | **5.42 µs each** |
+| 1000 cold grains, called at once | 7.98 µs each | **5.36 µs each** |
 | 1000 callers meeting one cold grain | one activation | one activation |
 | runtime bookkeeping per activation | 1126 B | **1066 B** |
 
@@ -74,8 +79,8 @@ and the two numbers say why:
 
 | 100 000 idle grains, 3.14 | total | longest stall |
 |---|---|---|
-| in one go | 81.0 ms | **81.1 ms** |
-| chunked (current) | 83.6 ms | **6.9 ms** |
+| in one go | 79.7 ms | **79.7 ms** |
+| chunked (current) | 82.0 ms | **6.4 ms** |
 
 The total is what nobody waits for. The stall is what a caller waits — one
 uninterrupted block with every other coroutine behind it. Chunking trades a

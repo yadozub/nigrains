@@ -21,16 +21,15 @@ for a value that follows control flow, and asyncio propagates it into tasks.
 from __future__ import annotations
 
 import time
-from collections.abc import Awaitable, Callable
 from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, TypeAlias
+from typing import TYPE_CHECKING, Any
 
 from nigrains.errors import GrainError
 
 if TYPE_CHECKING:
-    from collections.abc import Iterator
+    from collections.abc import Awaitable, Callable, Iterator
 
     from nigrains.grain import GrainId
 
@@ -88,13 +87,10 @@ class Call:
     deadline: float | None = None
 
 
-# Spelled with TypeAlias rather than the `type` statement: the floor is
-# 3.11 and `type` is 3.12. The matrix caught it, which is what the matrix
-# is for - it reads as a clean alias on the version it was written on.
-Next: TypeAlias = Callable[[Call], Awaitable[Any]]
+type Next = Callable[[Call], Awaitable[Any]]
 """The rest of the chain, as a filter receives it."""
 
-CallFilter: TypeAlias = Callable[[Call, Next], Awaitable[Any]]
+type CallFilter = Callable[[Call, Next], Awaitable[Any]]
 """A filter wraps a call and the rest of the chain.
 
     async def timing(call: Call, nxt: Next) -> Any:

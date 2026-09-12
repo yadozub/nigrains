@@ -29,7 +29,7 @@ lands, so a method that does not exist is an error where it is written.
 from __future__ import annotations
 
 import inspect
-from typing import TYPE_CHECKING, Any, TypeVar, cast
+from typing import TYPE_CHECKING, Any, cast
 
 from nigrains.errors import NoSuchGrainMethodError
 from nigrains.grain import Grain, GrainId
@@ -38,8 +38,6 @@ if TYPE_CHECKING:
     from collections.abc import Callable, Coroutine
 
     from nigrains.runtime import Runtime
-
-G = TypeVar("G", bound=Grain)
 
 
 class _Reference:
@@ -112,7 +110,7 @@ class _Reference:
         return f"<reference to {self._id}>"
 
 
-def reference_to(runtime: Runtime, grain: type[G], key: str) -> G:
+def reference_to[G: Grain](runtime: Runtime, grain: type[G], key: str) -> G:
     """Returns a reference to one grain, typed as that grain.
 
     Args:

@@ -1,5 +1,6 @@
-# Every version the package claims in `requires-python`, on every push.
-# The claim is cheap to make and this is what makes it true.
+# The one interpreter the package claims, on every push. It was a matrix
+# of four until the floor moved to 3.14; the matrix earned its keep on the
+# way out, catching a `type` statement that 3.11 could not parse.
 name: check
 
 on:
@@ -10,16 +11,12 @@ on:
 jobs:
   test:
     runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        python: ["3.11", "3.12", "3.13", "3.14"]
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v5
         with:
           enable-cache: true
-      - run: uv run --python ${{ matrix.python }} pytest
+      - run: uv run --python 3.14 pytest
 
   lint:
     runs-on: ubuntu-latest

@@ -46,7 +46,7 @@ from typing import Any, Self
 from nigrains.call import Call, CallFilter, DeadlineExceeded, current_deadline
 from nigrains.errors import GrainNotRegisteredError, NoSuchGrainMethodError
 from nigrains.grain import Grain, GrainId
-from nigrains.reference import G, reference_to
+from nigrains.reference import reference_to
 
 log = logging.getLogger(__name__)
 """Named after the module, with no handler and no level.
@@ -257,7 +257,7 @@ class Runtime:
             raise ValueError(f"grain type {grain_type!r} is already registered")
         self._factories[grain_type] = factory if factory is not None else grain
 
-    def reference(self, grain: type[G], key: str) -> G:
+    def reference[G: Grain](self, grain: type[G], key: str) -> G:
         """Returns a reference to one grain, typed as that grain.
 
         The way to call a grain when the caller knows what kind it is, which

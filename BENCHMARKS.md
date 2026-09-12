@@ -1,7 +1,12 @@
 # Benchmarks
 
-Run them yourself: `bench/run.sh` builds a container and measures on every
-interpreter this package claims. Two CPUs and 2 GiB, pinned, because a
+Run them yourself: `bench/run.sh` builds a container and measures.
+
+**The interpreter is pinned inside that container, and it matters more than
+it looks.** Dropping the pin once let `uv run` fall through to the CPython in
+the base image instead of the standalone build uv fetches, and every number
+moved by twenty per cent — including the bare `await`, which is the line
+that gave it away. Two builds of one version are not one machine. Two CPUs and 2 GiB, pinned, because a
 benchmark whose numbers move with whatever else the machine is doing measures
 the machine.
 
@@ -27,8 +32,8 @@ claw it back by reading the context variable directly instead of through its
 accessor measured *worse* (1.48 µs), which is inside the noise, so it was
 reverted rather than kept as a lucky-looking number.
 
-The 3.11–3.13 rows below are from 0.2.1 and have not been retaken; the
-shapes hold, the digits are one release old.
+Earlier releases carried rows for 3.11 to 3.13. The floor is 3.14 from
+0.4.0, and those rows are gone rather than left to rot.
 
 A typed reference costs about 0.3 µs more than the raw call. It resolves a
 method name against the class once and caches the caller on the reference,
@@ -64,11 +69,11 @@ many were inside the method at the same moment.
 
 ## Activation
 
-| | 3.11 | 3.14 |
-|---|---|---|
-| 1000 cold grains, called at once | 7.98 µs each | **5.36 µs each** |
-| 1000 callers meeting one cold grain | one activation | one activation |
-| runtime bookkeeping per activation | 1126 B | **1066 B** |
+| | 3.14 |
+|---|---|
+| 1000 cold grains, called at once | **5.36 µs each** |
+| 1000 callers meeting one cold grain | one activation |
+| runtime bookkeeping per activation | **1066 B** |
 
 A hundred thousand activated grains cost about **102 MiB** of the runtime's
 own structures, before a grain holds anything of its own. That is the number

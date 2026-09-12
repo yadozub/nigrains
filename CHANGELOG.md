@@ -1,5 +1,29 @@
 # Changelog
 
+## 0.4.0 — 2026-09-12
+
+**The floor is Python 3.14.** Not for syntax — nothing here needed 3.14 to
+parse. The reason is what comes next: free-threading is supported rather
+than experimental from 3.14, and the unwritten parts of the roadmap that
+would benefit most from it — a pool of stateless workers, a grain doing
+CPU-bound work — are exactly the parts a global interpreter lock makes
+pointless. Serving interpreters where the honest answer is "that will not
+help you" is a promise worth not making.
+
+It is also the reversible direction: lowering a floor later costs a release,
+raising one breaks everybody who installed on the old one.
+
+What that buys immediately is small and welcome: `type` aliases instead of
+`TypeAlias`, and PEP 695 type parameters instead of a module-level
+`TypeVar`. The four-version matrix earned its keep on the way out — it was
+what caught a `type` statement 3.11 could not parse.
+
+**And the benchmark's interpreter is pinned**, after removing the pin let
+`uv run` fall through to the base image's CPython instead of the standalone
+build uv fetches, and moved every number by twenty per cent. The bare
+`await` moving too is what gave it away; two builds of one version are not
+one machine.
+
 ## 0.3.1 — 2026-09-12
 
 **`nigrains.testing` — the adversarial scenarios, packaged.** Every real

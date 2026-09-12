@@ -36,7 +36,7 @@ from __future__ import annotations
 import asyncio
 import inspect
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any, TypeVar
+from typing import TYPE_CHECKING, Any
 
 from nigrains.call import deadline
 from nigrains.errors import GrainError
@@ -45,8 +45,6 @@ from nigrains.runtime import Runtime
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
-
-G = TypeVar("G", bound=Grain)
 
 _KEY = "conformance"
 _CALLERS = 8
@@ -191,7 +189,7 @@ class _Overlap:
         return counted
 
 
-async def check_conformance(
+async def check_conformance[G: Grain](
     grain: type[G],
     exercise: Callable[[G], Awaitable[Any]],
     *,

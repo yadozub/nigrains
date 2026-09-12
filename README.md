@@ -102,6 +102,7 @@ your grain meets them in your test suite rather than in production:
 ```python
 from nigrains.testing import check_conformance
 
+
 async def test_my_grain_behaves():
     await check_conformance(PriceGrain, lambda ref: ref.price_of("AAPL"))
 ```
@@ -144,8 +145,18 @@ lookup is a grain that should not have been one.
 
 ## Requirements
 
-Python 3.11+ (that floor is `typing.Self`, and nothing else in here reaches
-past it). No dependencies. The suite runs on 3.11, 3.12, 3.13 and 3.14.
+Python 3.14+. No dependencies.
+
+**The floor is deliberate and it is not about syntax.** Nothing here needs
+3.14 to parse; the reason is what comes next. Free-threading is supported
+rather than experimental from 3.14, and the parts of this package still to
+be written — a pool of stateless workers, a grain doing CPU-bound work —
+are the parts that a global interpreter lock makes pointless. Supporting
+interpreters on which the answer would have to be "that will not help you"
+is a promise worth not making.
+
+It is also the reversible direction. Lowering a floor later costs a release;
+raising one breaks everybody who installed on the old one.
 
 ## Dedication
 

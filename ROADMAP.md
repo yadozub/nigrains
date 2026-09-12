@@ -8,7 +8,9 @@ outside and only one of them is worth filing an issue about.
 that served one system. It is now meant to be the virtual-actor library
 Python does not have — an absence that has already cost its author time on a
 real project, and is unlikely to have cost only him. The shape is still
-fixed: **a runtime, not a framework.** Everything below either serves
+fixed: **a runtime, not a framework.** Headings below are milestones and
+not version numbers; the two stopped lining up at 0.4.0 and pretending
+otherwise would only mislead. Everything below either serves
 addressing a grain by identity or gets refused.
 
 Nothing here ships without the test that would find its failure. A runtime
@@ -30,9 +32,22 @@ leaving the runtime waits for calls in flight.
 **0.2.1** — `Runtime.stats`; `max_activations` with least-recently-used
 eviction.
 
+**0.3.0** — call filters, and deadlines that travel in a context variable.
+
+**0.3.1** — `nigrains.testing`, the adversarial scenarios packaged, and
+`Grain.tolerates_double_activation` for the one they cannot guess.
+
+**0.4.0** — the floor is Python 3.14. Not for syntax: free-threading is
+supported rather than experimental there, and the unwritten parts of the
+list below - stateless workers, CPU-bound grains - are exactly the parts a
+global interpreter lock makes pointless. Promising to serve interpreters
+where the honest answer is "that will not help you" is a promise worth not
+making, and lowering a floor later costs a release while raising one breaks
+everybody.
+
 ---
 
-## 0.3 — the call path, finished
+## Next — the call path, finished
 
 All local, all cheap, and all of it must exist **before** the cluster: a
 transport has to respect these, and adding them afterwards means doing them
@@ -60,7 +75,7 @@ everything else, which the documentation will say in those words.
 
 ---
 
-## 0.3.x — `nigrains.testing`, a conformance kit
+## ~~`nigrains.testing`~~ — shipped in 0.3.1
 
 **Every real defect this package has had was found the same way: an
 adversarial scenario.** A cancelled waiter poisoning a shared activation. A
@@ -98,7 +113,7 @@ package refuses to ship.
 
 ---
 
-## 0.4 — state, with the concurrency answer attached
+## Then — state, with the concurrency answer attached
 
 **This was refused in the first draft of this file, and the refusal was half
 right.** What Orleans gives is a storage provider, serialization, and an
@@ -119,7 +134,7 @@ serialization stays theirs. What this package owes them is the semantics.
 
 ---
 
-## 0.5 — the cluster, without a network
+## Then — the cluster, without a network
 
 The design errors live here and are cheapest here, so this is a milestone of
 its own.
@@ -155,7 +170,7 @@ one process, so every behaviour below is tested before a socket exists.
 
 ---
 
-## 0.6 — the cluster, for real
+## Then — the cluster, for real
 
 Optional extras, so the core keeps its zero dependencies and a single-node
 user pays nothing for a cluster they do not run:
@@ -203,7 +218,7 @@ wrong trade.
 
 ---
 
-## 0.7 — reminders
+## Last — reminders
 
 A schedule that survives deactivation: a timer, plus 0.4 to remember it,
 plus a cluster to decide whose turn it is. Last because it cannot be

@@ -18,10 +18,17 @@ a grain you already hold.
 
 | Python | direct await | `runtime.call` | `reference.method()` |
 |---|---|---|---|
-| 3.11 | 0.12 µs | 1.69 µs | 2.16 µs |
-| 3.12 | 0.10 µs | 1.42 µs | 1.78 µs |
-| 3.13 | 0.08 µs | 1.33 µs | 1.68 µs |
-| 3.14 | 0.08 µs | **1.23 µs** | **1.51 µs** |
+| 3.14 | 0.08 µs | **1.41 µs** | **1.72 µs** |
+
+**Dispatch got 0.18 µs slower in 0.3.0** and the trade is named rather than
+buried: every call now reads whether a deadline is in force, and the fast
+path — no filters, no deadline — is a branch on top of that. An attempt to
+claw it back by reading the context variable directly instead of through its
+accessor measured *worse* (1.48 µs), which is inside the noise, so it was
+reverted rather than kept as a lucky-looking number.
+
+The 3.11–3.13 rows below are from 0.2.1 and have not been retaken; the
+shapes hold, the digits are one release old.
 
 A typed reference costs about 0.3 µs more than the raw call. It resolves a
 method name against the class once and caches the caller on the reference,

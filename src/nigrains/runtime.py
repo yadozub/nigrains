@@ -36,12 +36,14 @@ import asyncio
 import logging
 import time
 from collections import OrderedDict
-from collections.abc import Callable, Iterator
+from collections.abc import Awaitable, Callable, Iterator, Sequence
 from contextlib import contextmanager, suppress
 from dataclasses import dataclass
+from functools import partial
 from types import TracebackType
 from typing import Any, Self
 
+from nigrains.call import Call, CallFilter, DeadlineExceeded, current_deadline
 from nigrains.errors import GrainNotRegisteredError, NoSuchGrainMethodError
 from nigrains.grain import Grain, GrainId
 from nigrains.reference import G, reference_to
@@ -183,6 +185,7 @@ class Runtime:
         sweep_seconds: float = 30.0,
         drain_seconds: float = 30.0,
         max_activations: int | None = None,
+        filters: Sequence[CallFilter] = (),
         clock: Callable[[], float] = time.monotonic,
     ) -> None:
         """Builds an empty runtime.
@@ -202,9 +205,16 @@ class Runtime:
                 grain holds anything of its own, so a hundred thousand is
                 about a hundred megabytes of runtime and whatever the grains
                 are worth on top.
+            filters: Wrapped around every call, outermost first. This is
+                where logging, tracing, retry, authorisation and per-call
+                timeouts belong; without it they end up patched onto the
+                runtime from outside. Empty by default, and an empty chain
+                costs nothing - the dispatch path is unchanged when there
+                are no filters and no deadline.
             clock: Monotonic source of the current time.
         """
         self._factories: dict[str, GrainFactory] = {}
+        self._filters = tuple(filters)
         self._activations: OrderedDict[GrainId, _Activation] = OrderedDict()
         self._idle_seconds = idle_seconds
         self._sweep_seconds = sweep_seconds
@@ -295,6 +305,72 @@ class Runtime:
             GrainNotRegisteredError: No factory for that type.
             NoSuchGrainMethodError: The grain has no such method, or the
                 name resolves to something that is not callable.
+        """
+        at = current_deadline()
+        if not self._filters and at is None:
+            # The path every call took before there were filters, kept
+            # separate rather than made general: building a Call and a chain
+            # is allocation, and most calls have nothing to wrap.
+            return await self._dispatch(grain_id, method, args, kwargs)
+
+        return await self._through_filters(
+            Call(grain=grain_id, method=method, args=args, kwargs=kwargs, deadline=at)
+        )
+
+    async def _through_filters(self, call: Call) -> Any:  # noqa: ANN401 - the grain's own
+        """Runs the filter chain, with dispatch at the bottom of it.
+
+        Args:
+            call: What is being invoked.
+
+        Returns:
+            Whatever the grain returned.
+
+        Raises:
+            DeadlineExceeded: The time allowed ran out - before dispatch if
+                there was none left, or during the call if it ran out
+                partway. Both are the same fact to a handler and different
+                facts in a log.
+        """
+
+        async def dispatch(inner: Call) -> Any:  # noqa: ANN401 - the grain's own
+            if inner.deadline is None:
+                return await self._dispatch(inner.grain, inner.method, inner.args, inner.kwargs)
+            left = inner.deadline - self._clock()
+            if left <= 0:
+                raise DeadlineExceeded(str(inner.grain), inner.method)
+            try:
+                async with asyncio.timeout(left):
+                    return await self._dispatch(inner.grain, inner.method, inner.args, inner.kwargs)
+            except TimeoutError as exc:
+                raise DeadlineExceeded(str(inner.grain), inner.method) from exc
+
+        chain: Callable[[Call], Awaitable[Any]] = dispatch
+        for wrapping in reversed(self._filters):
+            chain = partial(_wrap, wrapping, chain)
+        return await chain(call)
+
+    async def _dispatch(
+        self,
+        grain_id: GrainId,
+        method: str,
+        args: tuple[Any, ...],
+        kwargs: dict[str, Any],
+    ) -> Any:  # noqa: ANN401 - the grain's own
+        """Activates if need be, then serves the call.
+
+        Args:
+            grain_id: Which grain.
+            method: Which of its methods.
+            args: Positional arguments.
+            kwargs: Keyword arguments.
+
+        Returns:
+            Whatever the method returned.
+
+        Raises:
+            GrainNotRegisteredError: No factory for that type.
+            NoSuchGrainMethodError: The grain has no such method.
         """
         activation = await self._activated(grain_id)
         target = getattr(activation.grain, method, None)
@@ -584,3 +660,25 @@ class Runtime:
             else:
                 if collected:
                     log.debug("collected %d idle grains", collected)
+
+
+async def _wrap(
+    outer: CallFilter,
+    inner: Callable[[Call], Awaitable[Any]],
+    call: Call,
+) -> Any:  # noqa: ANN401 - the grain's own
+    """Applies one filter to the rest of the chain.
+
+    A module-level function rather than a closure in the loop that builds
+    the chain, because a closure there captures the loop variable and every
+    filter in the chain ends up being the last one.
+
+    Args:
+        outer: The filter.
+        inner: What it wraps.
+        call: The invocation.
+
+    Returns:
+        Whatever came back.
+    """
+    return await outer(call, inner)

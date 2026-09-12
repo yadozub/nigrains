@@ -1,5 +1,32 @@
 # Changelog
 
+## 0.3.0 — 2026-09-12
+
+The first half of the call path. Both of these had to exist before a
+cluster: a transport has to respect them, and adding them afterwards means
+deciding their shape twice.
+
+- **Call filters.** `Runtime(filters=[...])` wraps every call, outermost
+  first. Logging, tracing, retry, authorisation and per-call timeouts belong
+  here; without it they get patched onto the runtime from outside. A filter
+  that does not await its `next` does not call the grain, which is how a
+  cache or a refusal is written — and one gap it opens is written down: a
+  filter can return something the method never could, and no type checker
+  can see past the chain.
+- **Deadlines that travel.** `with deadline(2.0):` limits the calls made
+  inside it, including calls a grain makes to another grain, because it
+  rides in a context variable rather than an argument — an argument would
+  have to be threaded through grain signatures that belong to their authors.
+  Nesting takes the earlier of the two. A grain can ask `remaining()` and
+  shorten its own work, which is the difference between a deadline and a
+  kill. `DeadlineExceeded` is a `TimeoutError`.
+
+**Dispatch costs 0.18 µs more**, because every call now reads whether a
+deadline is in force. Named rather than buried, and an attempt to claw it
+back measured worse and was reverted.
+
+Still to come in 0.3: timers, and stateless workers.
+
 ## 0.2.1 — 2026-09-12
 
 - `Runtime.stats` — activations, failed activations, deactivations,

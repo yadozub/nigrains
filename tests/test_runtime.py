@@ -9,10 +9,23 @@ runtime takes its clock as a parameter and these tests spend no seconds.
 from __future__ import annotations
 
 import asyncio
+from typing import Any
 
 import pytest
 
-from nigrains import Grain, GrainId, GrainNotRegisteredError, NoSuchGrainMethodError, Runtime
+from nigrains import (
+    Call,
+    CallFilter,
+    DeadlineExceeded,
+    Grain,
+    GrainId,
+    GrainNotRegisteredError,
+    NoSuchGrainMethodError,
+    Runtime,
+    deadline,
+    remaining,
+)
+from nigrains.call import Next
 
 
 class Clock:
@@ -729,3 +742,141 @@ async def test_an_unbounded_fleet_evicts_nothing(clock: Clock) -> None:
 
     assert runtime.activated == 6
     assert runtime.stats.evictions == 0
+
+
+class Patient(Grain):
+    """Waits as long as it is told, and can be asked how long it has."""
+
+    grain_type = "patient"
+    reentrant = True
+
+    async def sleep(self, seconds: float) -> str:
+        await asyncio.sleep(seconds)
+        return "done"
+
+    async def how_long_have_i(self) -> float | None:
+        return remaining()
+
+
+def _filtered(*filters: CallFilter) -> Runtime:
+    """A runtime with real time, for the tests about time."""
+    built = Runtime(idle_seconds=1e9, sweep_seconds=1e9, filters=filters)
+    built.register(Counter)
+    built.register(Patient)
+    return built
+
+
+async def test_a_filter_wraps_every_call(runtime: Runtime) -> None:
+    seen: list[tuple[str, str]] = []
+
+    async def record(call: Call, nxt: Next) -> Any:
+        seen.append((call.grain.type, call.method))
+        return await nxt(call)
+
+    built = Runtime(idle_seconds=1e9, sweep_seconds=1e9, filters=[record])
+    built.register(Counter)
+
+    assert await built.reference(Counter, "a").increment() == 1
+    assert seen == [("counter", "increment")]
+
+
+async def test_filters_run_outermost_first(runtime: Runtime) -> None:
+    """The order they are given, so a reader can predict what wraps what."""
+    order: list[str] = []
+
+    def named(name: str) -> CallFilter:
+        async def filter_(call: Call, nxt: Next) -> Any:
+            order.append(f"{name} in")
+            try:
+                return await nxt(call)
+            finally:
+                order.append(f"{name} out")
+
+        return filter_
+
+    built = Runtime(idle_seconds=1e9, sweep_seconds=1e9, filters=[named("a"), named("b")])
+    built.register(Counter)
+
+    await built.reference(Counter, "x").increment()
+
+    assert order == ["a in", "b in", "b out", "a out"]
+
+
+async def test_a_filter_that_does_not_call_next_stops_the_call(runtime: Runtime) -> None:
+    """How a cache or a refusal is written, and how one is written by accident."""
+    Counter.activations = 0
+
+    async def refuse(call: Call, nxt: Next) -> Any:
+        return "instead"
+
+    built = Runtime(idle_seconds=1e9, sweep_seconds=1e9, filters=[refuse])
+    built.register(Counter)
+
+    # The type checker objects, and it is right to: a filter can return
+    # something the method never could, and the reference is typed as
+    # the grain. That gap is real and is written up in call.py.
+    assert await built.reference(Counter, "a").increment() == "instead"  # type: ignore[comparison-overlap]
+    assert built.activated == 0, "the grain was never activated"
+
+
+async def test_a_filter_sees_what_the_grain_raised() -> None:
+    """Which is what makes retry and logging writable as filters."""
+    Broken.attempts = 0
+    caught: list[str] = []
+
+    async def watch(call: Call, nxt: Next) -> Any:
+        try:
+            return await nxt(call)
+        except RuntimeError as exc:
+            caught.append(str(exc))
+            raise
+
+    built = Runtime(idle_seconds=1e9, sweep_seconds=1e9, filters=[watch])
+    built.register(Broken)
+
+    with pytest.raises(RuntimeError):
+        await built.reference(Broken, "a").ping()
+    assert caught == ["no"]
+
+
+async def test_a_call_past_its_deadline_is_refused() -> None:
+    built = _filtered()
+
+    with pytest.raises(DeadlineExceeded, match="sleep"), deadline(0.05):
+        await built.reference(Patient, "a").sleep(5.0)
+
+
+async def test_a_deadline_already_gone_refuses_before_activating() -> None:
+    """Nothing is built for work that cannot be done."""
+    built = _filtered()
+
+    with deadline(-1.0), pytest.raises(DeadlineExceeded):
+        await built.reference(Patient, "a").sleep(0.0)
+
+    assert built.activated == 0
+
+
+async def test_a_nested_deadline_cannot_ask_for_longer() -> None:
+    """The outer caller has already promised somebody else."""
+    built = _filtered()
+
+    with deadline(0.05), pytest.raises(DeadlineExceeded), deadline(10.0):
+        await built.reference(Patient, "a").sleep(5.0)
+
+
+async def test_a_grain_can_ask_how_long_it_has() -> None:
+    """The difference between a deadline and a kill: it can shorten its work."""
+    built = _filtered()
+
+    with deadline(5.0):
+        left = await built.reference(Patient, "a").how_long_have_i()
+
+    assert left is not None
+    assert 0.0 < left <= 5.0
+
+
+async def test_a_grain_with_no_deadline_is_told_so_rather_than_zero() -> None:
+    """None is not "no time left", and a caller must not read it as zero."""
+    built = _filtered()
+
+    assert await built.reference(Patient, "a").how_long_have_i() is None

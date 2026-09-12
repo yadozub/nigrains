@@ -17,6 +17,7 @@ To my teacher and mentor, Vitaly Chashin.
 
 import logging
 
+from nigrains.call import Call, CallFilter, DeadlineExceeded, deadline, remaining
 from nigrains.errors import GrainError, GrainNotRegisteredError, NoSuchGrainMethodError
 from nigrains.grain import Grain, GrainId
 from nigrains.runtime import Runtime, Stats
@@ -27,6 +28,9 @@ from nigrains.runtime import Runtime, Stats
 logging.getLogger(__name__).addHandler(logging.NullHandler())
 
 __all__ = [
+    "Call",
+    "CallFilter",
+    "DeadlineExceeded",
     "Grain",
     "GrainError",
     "GrainId",
@@ -34,4 +38,6 @@ __all__ = [
     "NoSuchGrainMethodError",
     "Runtime",
     "Stats",
+    "deadline",
+    "remaining",
 ]

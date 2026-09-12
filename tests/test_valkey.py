@@ -17,8 +17,12 @@ from nigrains.valkey import ValkeyMembership
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator, Iterator
 
-redis = pytest.importorskip("redis.asyncio")
-testcontainers = pytest.importorskip("testcontainers.core.container")
+    from redis.asyncio import Redis
+
+# The runtime guard and the type are two different needs: importorskip binds
+# a module object, which a type checker cannot read a class name out of.
+pytest.importorskip("redis.asyncio")
+pytest.importorskip("testcontainers.core.container")
 
 IMAGE = "valkey/valkey:8.1.10-alpine"
 PORT = 6379
@@ -45,9 +49,11 @@ def valkey_url() -> Iterator[str]:
 
 
 @pytest.fixture()
-async def client(valkey_url: str) -> AsyncIterator[redis.Redis]:
+async def client(valkey_url: str) -> AsyncIterator[Redis]:
     """A client that closes itself."""
-    connected = redis.from_url(valkey_url)
+    from redis.asyncio import from_url
+
+    connected = from_url(valkey_url)
     try:
         yield connected
     finally:
@@ -67,7 +73,7 @@ def _prefix(request: pytest.FixtureRequest) -> str:
 
 
 async def test_a_node_that_started_is_in_its_own_fleet(
-    client: redis.Redis, request: pytest.FixtureRequest
+    client: Redis, request: pytest.FixtureRequest
 ) -> None:
     membership = ValkeyMembership("one", client, prefix=_prefix(request))
 
@@ -79,7 +85,7 @@ async def test_a_node_that_started_is_in_its_own_fleet(
         await membership.stop()
 
 
-async def test_nodes_find_each_other(client: redis.Redis, request: pytest.FixtureRequest) -> None:
+async def test_nodes_find_each_other(client: Redis, request: pytest.FixtureRequest) -> None:
     prefix = _prefix(request)
     first = ValkeyMembership("one", client, prefix=prefix)
     second = ValkeyMembership("two", client, prefix=prefix)
@@ -98,7 +104,7 @@ async def test_nodes_find_each_other(client: redis.Redis, request: pytest.Fixtur
 
 
 async def test_leaving_is_immediate_rather_than_waiting_for_the_lease(
-    client: redis.Redis, request: pytest.FixtureRequest
+    client: Redis, request: pytest.FixtureRequest
 ) -> None:
     """The other nodes rebalance in a read, not in a lease."""
     prefix = _prefix(request)
@@ -117,7 +123,7 @@ async def test_leaving_is_immediate_rather_than_waiting_for_the_lease(
 
 
 async def test_a_node_that_stops_refreshing_falls_out_when_its_lease_runs_out(
-    client: redis.Redis, request: pytest.FixtureRequest
+    client: Redis, request: pytest.FixtureRequest
 ) -> None:
     """The case a graceful goodbye does not cover: a process that was killed."""
     prefix = _prefix(request)
@@ -140,7 +146,7 @@ async def test_a_node_that_stops_refreshing_falls_out_when_its_lease_runs_out(
 
 
 async def test_this_node_is_a_member_even_if_the_read_missed_it(
-    client: redis.Redis, request: pytest.FixtureRequest
+    client: Redis, request: pytest.FixtureRequest
 ) -> None:
     """A runtime that believed it was not in its own fleet would forward
     everything somewhere else.
@@ -159,7 +165,7 @@ async def test_this_node_is_a_member_even_if_the_read_missed_it(
 
 
 async def test_a_heartbeat_that_does_not_fit_its_lease_is_refused(
-    client: redis.Redis,
+    client: Redis,
 ) -> None:
     """It would mean a node dropping out of its own fleet between beats."""
     with pytest.raises(ValueError, match="does not fit inside a lease"):
@@ -167,7 +173,7 @@ async def test_a_heartbeat_that_does_not_fit_its_lease_is_refused(
 
 
 async def test_two_fleets_sharing_a_valkey_do_not_see_each_other(
-    client: redis.Redis, request: pytest.FixtureRequest
+    client: Redis, request: pytest.FixtureRequest
 ) -> None:
     """Which is the whole reason the prefix is a setting."""
     ours = ValkeyMembership("one", client, prefix=f"{_prefix(request)}:ours")

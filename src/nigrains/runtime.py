@@ -221,7 +221,7 @@ class Runtime:
         """
         self._factories: dict[str, GrainFactory] = {}
         self._kinds: dict[str, type[Grain]] = {}
-        self._next_worker: dict[GrainId, int] = {}
+        self._next_activation: dict[GrainId, int] = {}
         self._filters = tuple(filters)
         self._activations: OrderedDict[GrainId, _Activation] = OrderedDict()
         self._idle_seconds = idle_seconds
@@ -263,8 +263,8 @@ class Runtime:
             raise ValueError(f"{grain.__name__} declares no grain_type, so it has no address")
         if grain_type in self._factories:
             raise ValueError(f"grain type {grain_type!r} is already registered")
-        if grain.stateless_workers < 0:
-            raise ValueError(f"{grain.__name__} asks for a negative pool of workers")
+        if grain.activations_per_key < 0:
+            raise ValueError(f"{grain.__name__} asks for a negative number of activations per key")
         self._factories[grain_type] = factory if factory is not None else grain
         self._kinds[grain_type] = grain
 
@@ -399,17 +399,17 @@ class Runtime:
     def _route(self, grain_id: GrainId) -> GrainId:
         """Turns the identity a caller used into the one that answers.
 
-        The same identity for every kind but a stateless worker, whose
-        callers are spread over its pool in turn.
+        The same identity for every kind but one with a pool, whose callers
+        are spread over its activations in turn.
 
-        **The worker's key is the caller's with an index on it**, which can
-        collide with a key somebody chose - ``"a"`` with eight workers
-        reaches ``"a#0"`` through ``"a#7"``, and a caller who names ``"a#3"``
-        lands on one of them. That is allowed to happen because it cannot
-        matter: a stateless worker has no state, and which one answers is
-        the question the whole kind exists to make uninteresting. For any
-        grain where it would matter, the pool is zero and this returns what
-        it was given.
+        **A pooled activation's key is the caller's with an index on it**,
+        which can collide with a key somebody chose - ``"a"`` with a pool of
+        eight reaches ``"a#0"`` through ``"a#7"``, and a caller who names
+        ``"a#3"`` lands on one of them. That is allowed to happen because it
+        cannot matter: a pooled grain has no state, and which activation
+        answers is the question the whole kind exists to make uninteresting.
+        For any grain where it would matter, the pool is zero and this
+        returns what it was given.
 
         Args:
             grain_id: What the caller asked for.
@@ -418,10 +418,10 @@ class Runtime:
             What will answer.
         """
         kind = self._kinds.get(grain_id.type)
-        if kind is None or kind.stateless_workers <= 0:
+        if kind is None or kind.activations_per_key <= 0:
             return grain_id
-        turn = self._next_worker.get(grain_id, 0)
-        self._next_worker[grain_id] = (turn + 1) % kind.stateless_workers
+        turn = self._next_activation.get(grain_id, 0)
+        self._next_activation[grain_id] = (turn + 1) % kind.activations_per_key
         return GrainId(grain_id.type, f"{grain_id.key}#{turn}")
 
     async def _activated(self, grain_id: GrainId) -> _Activation:

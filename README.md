@@ -112,12 +112,20 @@ And a kind with no state to protect can be a pool:
 ```python
 class Render(Grain):
     grain_type = "render"
-    stateless_workers = 8
+    activations_per_key = 8
 ```
 
 Eight activations answer for one key, in turn. The right shape for
-CPU-bound or fan-out work, and the wrong shape for anything with state —
-a pool of eight is eight copies of that state, disagreeing.
+CPU-bound or fan-out work with no natural identity, and the wrong shape for
+anything with state — a pool of eight is eight copies of that state,
+disagreeing.
+
+Orleans calls this a *stateless worker*; this package does not, because a
+grain of this kind is still a grain and "worker" names the heavy thing the
+model replaces. **And it works against the model's own premise**, which is
+worth saying rather than hiding: this is the one kind where identity is
+admitted not to matter. If your work has a natural key, use the key. Many
+grains is what this is good at; a pool is what it falls back to.
 
 ## Checking your own grain
 
@@ -175,7 +183,7 @@ Python 3.14+. No dependencies.
 **The floor is deliberate and it is not about syntax.** Nothing here needs
 3.14 to parse; the reason is what comes next. Free-threading is supported
 rather than experimental from 3.14, and the parts of this package still to
-be written — a pool of stateless workers, a grain doing CPU-bound work —
+be written — a pool of activations, a grain doing CPU-bound work —
 are the parts that a global interpreter lock makes pointless. Supporting
 interpreters on which the answer would have to be "that will not help you"
 is a promise worth not making.

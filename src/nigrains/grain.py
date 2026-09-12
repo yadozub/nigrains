@@ -92,7 +92,7 @@ class Grain:
             Read today by the conformance kit, which skips the scenario
             comparing two activations for a grain that never claimed to
             survive them.
-        stateless_workers: How many activations answer for one key, or 0 -
+        activations_per_key: How many activations answer for one key, or 0 -
             the default - for the model's own rule of one.
 
             **The one place this package lets identity stop meaning one
@@ -105,12 +105,27 @@ class Grain:
 
             The wrong shape for everything else. A grain with state and a
             pool is eight copies of that state, disagreeing.
+
+            **Orleans calls this a stateless worker, and this package does
+            not**, on purpose. A grain of this kind is still a grain - a
+            kilobyte, built on demand, collected when idle - and "worker"
+            names the heavy thing the model exists to replace: a process
+            that consumes a queue. In a system where both exist, the process
+            is the *host* and the grains live inside it, and one word for
+            both makes that sentence unreadable.
+
+            **And it sits against the grain of the model**, which is worth
+            saying rather than hiding: this package is about addressing one
+            thing by its identity, and this is the kind where identity is
+            admitted not to matter. Reach for it only when the work has no
+            natural key. If it has one, use the key - many grains is what
+            this is good at, and a pool is what it falls back to.
     """
 
     grain_type: ClassVar[str] = ""
     reentrant: ClassVar[bool] = False
     tolerates_double_activation: ClassVar[bool] = False
-    stateless_workers: ClassVar[int] = 0
+    activations_per_key: ClassVar[int] = 0
 
     def __init__(self, grain_id: GrainId) -> None:
         """Binds the activation to its identity.

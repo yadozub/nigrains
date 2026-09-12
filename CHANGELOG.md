@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.6.0 — 2026-09-12
+
+**`stateless_workers` is now `activations_per_key`.** Breaking, and only a
+name — but the name was importing the wrong idea. A grain of this kind is
+still a grain: a kilobyte, built on demand, collected when idle. "Worker"
+names the heavy thing this model exists to replace, a process that consumes
+a queue, and in a system where both exist the process is the *host* and the
+grains live inside it. One word for both makes that sentence unreadable, and
+the first system to use this package has an arq `TranslateWorker` that hosts
+a fleet.
+
+`activations_per_key` says what it does in the model's own words, and the
+docstring keeps Orleans' term so that anybody searching for it arrives here.
+
+The same change writes down something the old name let pass unremarked:
+**this kind works against the model's premise.** Addressing one thing by its
+identity is the whole idea, and this is the kind where identity is admitted
+not to matter. It is for work with no natural key. If the work has one, use
+it — many grains is what this is good at, and a pool is the fallback.
+
 ## 0.5.0 — 2026-09-12
 
 The call path is finished: a call can now be wrapped, given a deadline,

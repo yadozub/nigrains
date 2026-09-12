@@ -12,7 +12,7 @@ class Pooled(Grain):
     """Four of these answer for one key, one call at a time each."""
 
     grain_type = "pooled"
-    stateless_workers = 4
+    activations_per_key = 4
 
     async def activate(self) -> None:
         self.entered = 0
@@ -137,10 +137,10 @@ async def test_a_negative_pool_is_refused_at_registration() -> None:
 
     class Nonsense(Grain):
         grain_type = "nonsense"
-        stateless_workers = -1
+        activations_per_key = -1
 
         async def who(self) -> str:
             return self.id.key
 
-    with pytest.raises(ValueError, match="negative pool"):
+    with pytest.raises(ValueError, match="negative number of activations"):
         Runtime().register(Nonsense)

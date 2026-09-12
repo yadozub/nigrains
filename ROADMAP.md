@@ -37,12 +37,12 @@ eviction.
 **0.3.1** — `nigrains.testing`, the adversarial scenarios packaged, and
 `Grain.tolerates_double_activation` for the one they cannot guess.
 
-**0.5.0** — timers, and stateless workers. The call path is finished: a
+**0.5.0** — timers, and pooled activations. The call path is finished: a
 call can be wrapped, given a deadline, scheduled, or spread over a pool.
 
 **0.4.0** — the floor is Python 3.14. Not for syntax: free-threading is
 supported rather than experimental there, and the unwritten parts of the
-list below - stateless workers, CPU-bound grains - are exactly the parts a
+list below - pooled activations, CPU-bound grains - are exactly the parts a
 global interpreter lock makes pointless. Promising to serve interpreters
 where the honest answer is "that will not help you" is a promise worth not
 making, and lowering a floor later costs a release while raising one breaks
@@ -71,10 +71,10 @@ later.
 Nearly free, and honest about what it is — it dies with the activation,
 which is the whole difference between a timer and a reminder.
 
-**Stateless workers.** A grain kind where identity does *not* mean one
-activation: a pool answers, sized to the work. The right shape for
-CPU-bound or fan-out work with no state to protect, and the wrong shape for
-everything else, which the documentation will say in those words.
+**Pooled activations.** A grain kind where identity does *not* mean one
+activation: a pool answers, sized to the work. Orleans calls it a stateless
+worker; this package will not, because a grain of this kind is still a grain
+and "worker" names the heavy thing the model replaces.
 
 ---
 

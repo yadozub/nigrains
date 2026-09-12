@@ -66,6 +66,33 @@ grain always exists conceptually. Identity *is* the address.
   sweeper. Idleness is measured from the last call to *finish*, so a grain
   answering a slow call is never collected underneath its own caller.
 
+## More than one node
+
+```python
+cluster = Cluster(membership, transport)
+runtime = Runtime(cluster=cluster)
+```
+
+A call to a grain this node does not own is forwarded to the node that does,
+and nothing above the call changes — the same reference, the same method.
+
+**Placement is computed, not recorded.** A consistent hash over the live
+members means every node works out the same owner without asking anybody, so
+there is no directory to keep consistent, to recover, or to be stale. A node
+joining moves about one identity in N rather than all of them, which the
+tests measure.
+
+**A deadline crosses the hop as seconds remaining, not as a deadline.** A
+monotonic reading on one machine means nothing on another.
+
+`StaticMembership` and `LoopbackTransport` ship: between them they run the
+whole cluster in one process, which is how everything above is tested.
+Membership over a real network and a transport over a real socket arrive as
+optional extras, so the core keeps its zero dependencies.
+
+**A clustered runtime refuses a grain that says it cannot survive two of
+itself.** At boot, rather than at the first partition — see below.
+
 ## What it does not do, on purpose
 
 - **No persistence.** A grain loads whatever it wants in `activate()` and

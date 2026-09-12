@@ -1,5 +1,35 @@
 # Changelog
 
+## 0.8.0 — 2026-09-12
+
+**The cluster, with no network under it.** Placement by consistent hash over
+the live membership, forwarding to the node that owns a grain, and the
+ports a real transport will implement. `StaticMembership` and
+`LoopbackTransport` run the whole thing in one process, which is where every
+behaviour below is tested — what is left for a real transport is
+serialization and failure.
+
+- **No directory.** Placement is computed from the membership, so every node
+  works out the same owner without asking anybody: nothing to keep
+  consistent, nothing to recover, nothing to be stale. A node joining moves
+  about one identity in N rather than all of them, and the test measures
+  that rather than asserting it.
+- **A deadline crosses the hop as seconds remaining.** It is a reading of
+  one machine's monotonic clock and means nothing on another; the far side
+  starts its own from the number.
+- **`deliver` does not route.** Placement was decided by the sender, and
+  deciding it again on arrival would let a call bounce between two nodes
+  that disagree about the membership for a moment. A call arriving for a
+  grain this node no longer owns is served anyway — a transient second
+  activation, allowed on purpose.
+- **A clustered runtime refuses a grain that does not declare
+  `tolerates_double_activation`**, at boot rather than at the first
+  partition. This is the check `Grain.tolerates_double_activation` was added
+  for in 0.3.1, and it finally has something to refuse.
+
+Dispatch costs about 0.09 µs more: one check for whether there is a cluster,
+and one more call level between routing and serving.
+
 ## 0.7.0 — 2026-09-12
 
 **State, and the answer to what happens when two activations write it.**

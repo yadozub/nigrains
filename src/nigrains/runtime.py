@@ -43,7 +43,14 @@ from functools import partial
 from types import TracebackType
 from typing import Any, Self
 
-from nigrains.call import Call, CallFilter, DeadlineExceeded, current_deadline
+from nigrains.call import (
+    Call,
+    CallFilter,
+    DeadlineExceeded,
+    current_deadline,
+    deadline,
+)
+from nigrains.cluster import Cluster
 from nigrains.errors import GrainNotRegisteredError, NoSuchGrainMethodError
 from nigrains.grain import Grain, GrainId
 from nigrains.reference import reference_to
@@ -163,6 +170,10 @@ class Stats:
             knowing before blaming the latency on something else.
         calls: Calls dispatched since the runtime was built.
         in_flight: Calls running right now.
+        forwarded: Calls sent to another node because this one did not own
+            the grain. It only moves in a cluster, and it is worth watching:
+            a fleet where most calls are forwarded is a fleet whose callers
+            are on the wrong nodes.
     """
 
     activated: int
@@ -172,6 +183,7 @@ class Stats:
     evictions: int
     calls: int
     in_flight: int
+    forwarded: int
 
 
 class Runtime:
@@ -194,6 +206,7 @@ class Runtime:
         max_activations: int | None = None,
         filters: Sequence[CallFilter] = (),
         state: StateStore | None = None,
+        cluster: Cluster | None = None,
         clock: Callable[[], float] = time.monotonic,
     ) -> None:
         """Builds an empty runtime.
@@ -223,9 +236,15 @@ class Runtime:
                 state. None is a runtime that holds no such grains, and
                 registering one is then refused rather than discovered at
                 the first activation.
+            cluster: Where the other nodes are, or None for a runtime
+                that is the whole fleet. With one, a call to a grain this
+                node does not own is forwarded to the node that does, and
+                nothing above the call changes.
             clock: Monotonic source of the current time.
         """
         self._state = state
+        self._cluster = cluster
+        self._forwarded = 0
         self._factories: dict[str, GrainFactory] = {}
         self._kinds: dict[str, type[Grain]] = {}
         self._next_activation: dict[GrainId, int] = {}
@@ -275,6 +294,18 @@ class Runtime:
         if grain.persistent and self._state is None:
             raise ValueError(
                 f"{grain.__name__} declares persistent and this runtime has no state store"
+            )
+        if self._cluster is not None and not grain.tolerates_double_activation:
+            # Refused at boot rather than at the first partition. A cluster
+            # cannot promise one activation - two halves of a split each own
+            # a share and each is right about its own - so a grain saying it
+            # cannot survive two of itself is incompatible with the
+            # deployment it is being put into, and now is the honest moment
+            # to say so.
+            raise ValueError(
+                f"{grain.__name__} does not tolerate double activation and this runtime is "
+                f"clustered; set tolerates_double_activation if two of it are harmless, or "
+                f"keep its state where a conflict is detected"
             )
         self._factories[grain_type] = factory if factory is not None else grain
         self._kinds[grain_type] = grain
@@ -379,10 +410,104 @@ class Runtime:
         args: tuple[Any, ...],
         kwargs: dict[str, Any],
     ) -> Any:  # noqa: ANN401 - the grain's own
-        """Activates if need be, then serves the call.
+        """Decides where a call goes, then serves it or forwards it.
 
         Args:
-            grain_id: Which grain.
+            grain_id: Which grain the caller named.
+            method: Which of its methods.
+            args: Positional arguments.
+            kwargs: Keyword arguments.
+
+        Returns:
+            Whatever the method returned, here or on another node.
+        """
+        routed = self._route(grain_id)
+        if self._cluster is not None and not self._cluster.is_mine(routed):
+            return await self._forward(routed, method, args, kwargs)
+        return await self._dispatch_here(routed, method, args, kwargs)
+
+    async def _forward(
+        self,
+        grain_id: GrainId,
+        method: str,
+        args: tuple[Any, ...],
+        kwargs: dict[str, Any],
+    ) -> Any:  # noqa: ANN401 - the grain's own
+        """Sends a call to the node that owns the grain.
+
+        Args:
+            grain_id: Which grain, already routed through any pool.
+            method: Which of its methods.
+            args: Positional arguments.
+            kwargs: Keyword arguments.
+
+        Returns:
+            Whatever the grain returned.
+        """
+        cluster = self._cluster
+        if cluster is None:  # pragma: no cover - the caller checked
+            raise RuntimeError("forwarding without a cluster")
+        at = current_deadline()
+        self._forwarded += 1
+        return await cluster.transport.send(
+            cluster.owner_of(grain_id),
+            grain_id,
+            method,
+            args,
+            kwargs,
+            # Seconds left, not the deadline: the far side's clock is not
+            # this one's, and a monotonic reading means nothing over there.
+            None if at is None else at - self._clock(),
+        )
+
+    async def deliver(
+        self,
+        grain_id: GrainId,
+        method: str,
+        args: tuple[Any, ...],
+        kwargs: dict[str, Any],
+        *,
+        timeout: float | None = None,
+    ) -> Any:  # noqa: ANN401 - the grain's own
+        """Serves a call that another node placed here.
+
+        What a transport calls, and the only entry that does **not** route:
+        placement was decided by the sender, and deciding it again here
+        would let a call bounce between two nodes that disagree about the
+        membership for a moment.
+
+        A call arriving for a grain this node no longer owns is served all
+        the same. That is a transient second activation, it is allowed, and
+        it is why a clustered runtime refuses grains that say they cannot
+        survive one.
+
+        Args:
+            grain_id: Which grain, already routed.
+            method: Which of its methods.
+            args: Positional arguments.
+            kwargs: Keyword arguments.
+            timeout: Seconds the caller has left, turned back into a
+                deadline on this machine's clock.
+
+        Returns:
+            Whatever the grain returned.
+        """
+        if timeout is None:
+            return await self._dispatch_here(grain_id, method, args, kwargs)
+        with deadline(timeout, clock=self._clock):
+            return await self._dispatch_here(grain_id, method, args, kwargs)
+
+    async def _dispatch_here(
+        self,
+        grain_id: GrainId,
+        method: str,
+        args: tuple[Any, ...],
+        kwargs: dict[str, Any],
+    ) -> Any:  # noqa: ANN401 - the grain's own
+        """Activates if need be, then serves the call on this node.
+
+        Args:
+            grain_id: Which grain, already routed.
             method: Which of its methods.
             args: Positional arguments.
             kwargs: Keyword arguments.
@@ -394,7 +519,7 @@ class Runtime:
             GrainNotRegisteredError: No factory for that type.
             NoSuchGrainMethodError: The grain has no such method.
         """
-        activation = await self._activated(self._route(grain_id))
+        activation = await self._activated(grain_id)
         target = getattr(activation.grain, method, None)
         if target is None or not callable(target) or method.startswith("_"):
             raise NoSuchGrainMethodError(str(grain_id), method)
@@ -696,6 +821,7 @@ class Runtime:
             evictions=self._evictions,
             calls=self._calls,
             in_flight=self._in_flight,
+            forwarded=self._forwarded,
         )
 
     async def __aenter__(self) -> Self:
@@ -704,6 +830,8 @@ class Runtime:
         Returns:
             This runtime.
         """
+        if self._cluster is not None:
+            await self._cluster.membership.start()
         self._sweeper = asyncio.create_task(self._sweep())
         return self
 
@@ -728,6 +856,8 @@ class Runtime:
         await self._drain()
         for grain_id in list(self._activations):
             await self._deactivate(grain_id)
+        if self._cluster is not None:
+            await self._cluster.membership.stop()
 
     async def _drain(self) -> None:
         """Waits for calls in flight, up to the shutdown grace.

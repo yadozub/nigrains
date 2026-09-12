@@ -37,6 +37,10 @@ eviction.
 **0.3.1** — `nigrains.testing`, the adversarial scenarios packaged, and
 `Grain.tolerates_double_activation` for the one they cannot guess.
 
+**0.8.0** — placement by consistent hash, forwarding, and the boot refusal
+for a grain that cannot survive two of itself. `StaticMembership` and
+`LoopbackTransport` run the whole thing in one process.
+
 **0.7.0** — state, with the version that makes two writers a detected
 conflict rather than a lost update. A port of three operations, an in-memory
 store, and no backends.
@@ -143,7 +147,7 @@ serialization stays theirs. What this package owes them is the semantics.
 
 ---
 
-## Next — the cluster, without a network
+## ~~The cluster, without a network~~ — shipped in 0.8.0
 
 The design errors live here and are cheapest here, so this is a milestone of
 its own.
@@ -179,7 +183,7 @@ one process, so every behaviour below is tested before a socket exists.
 
 ---
 
-## Then — the cluster, for real
+## Next — the cluster, for real
 
 Optional extras, so the core keeps its zero dependencies and a single-node
 user pays nothing for a cluster they do not run:

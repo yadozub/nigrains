@@ -18,6 +18,15 @@ To my teacher and mentor, Vitaly Chashin.
 import logging
 
 from nigrains.call import Call, CallFilter, DeadlineExceeded, deadline, remaining
+from nigrains.cluster import (
+    Cluster,
+    LoopbackTransport,
+    Membership,
+    Ring,
+    StaticMembership,
+    Transport,
+    UnreachableNodeError,
+)
 from nigrains.errors import GrainError, GrainNotRegisteredError, NoSuchGrainMethodError
 from nigrains.grain import Grain, GrainId
 from nigrains.runtime import Runtime, Stats
@@ -37,6 +46,7 @@ logging.getLogger(__name__).addHandler(logging.NullHandler())
 __all__ = [
     "Call",
     "CallFilter",
+    "Cluster",
     "ConcurrentChange",
     "DeadlineExceeded",
     "Grain",
@@ -45,11 +55,17 @@ __all__ = [
     "GrainNotRegisteredError",
     "GrainState",
     "InMemoryStateStore",
+    "LoopbackTransport",
+    "Membership",
     "NoSuchGrainMethodError",
+    "Ring",
     "Runtime",
     "StateStore",
+    "StaticMembership",
     "Stats",
     "Stored",
+    "Transport",
+    "UnreachableNodeError",
     "deadline",
     "remaining",
 ]

@@ -23,7 +23,7 @@ a grain you already hold.
 
 | Python | direct await | `runtime.call` | `reference.method()` |
 |---|---|---|---|
-| 3.14 | 0.08 µs | **1.41 µs** | **1.72 µs** |
+| 3.14 | 0.08 µs | **1.54 µs** | **1.85 µs** |
 
 **Dispatch got 0.18 µs slower in 0.3.0** and the trade is named rather than
 buried: every call now reads whether a deadline is in force, and the fast

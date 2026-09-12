@@ -1,5 +1,37 @@
 # Changelog
 
+## 0.9.0 — 2026-09-12
+
+**The cluster over a real network.** Two extras, so the core keeps its zero
+dependencies and a single-node user installs neither.
+
+- `nigrains[valkey]` — `ValkeyMembership`, a key per node with a lease,
+  refreshed while the node lives. **Nobody decides that anybody else has
+  died:** a node stops being a member because it stopped saying it was one.
+  That removes the failure detector, the indirect probing that a failure
+  detector needs so one bad link does not evict a healthy node, and the
+  argument about who is right — in exchange for depending on something that
+  has to be up anyway. Tested against a real Valkey in a container, because
+  a fake store would agree with whatever this module believes about expiry
+  and scanning, which is the set of beliefs worth checking.
+- `nigrains[http]` — `HttpTransport` and `asgi_app(runtime)`, a bare ASGI
+  callable that mounts in whatever the host already runs.
+- A codec port, with JSON as the default and the limits said out loud: a
+  grain taking a dataclass wants a codec that knows about it. A failure
+  crossing the wire is rebuilt when both ends know the class and arrives as
+  `RemoteError` when they do not — never a guess at somebody else's
+  constructor.
+
+**Two defects the first HTTP test found, both of them real.** A deadline
+that crossed the wire was put into the context on arrival and enforced by
+nobody: `deliver` went straight to the local dispatch, skipping the filters
+and the deadline that a local call gets. The only thing stopping a slow
+remote call was the client's own timeout, and what came back was a
+cancellation rather than a deadline. And the ASGI endpoint caught
+`CancelledError` and rendered it as a response, which swallows a
+cancellation: the caller reads a strange error and whoever cancelled is told
+the work finished.
+
 ## 0.8.0 — 2026-09-12
 
 **The cluster, with no network under it.** Placement by consistent hash over

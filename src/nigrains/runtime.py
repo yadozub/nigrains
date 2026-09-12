@@ -367,14 +367,27 @@ class Runtime:
             return await self._dispatch(grain_id, method, args, kwargs)
 
         return await self._through_filters(
-            Call(grain=grain_id, method=method, args=args, kwargs=kwargs, deadline=at)
+            Call(grain=grain_id, method=method, args=args, kwargs=kwargs, deadline=at),
+            self._dispatch,
         )
 
-    async def _through_filters(self, call: Call) -> Any:  # noqa: ANN401 - the grain's own
-        """Runs the filter chain, with dispatch at the bottom of it.
+    async def _through_filters(
+        self,
+        call: Call,
+        terminal: Callable[[GrainId, str, tuple[Any, ...], dict[str, Any]], Awaitable[Any]],
+    ) -> Any:  # noqa: ANN401 - the grain's own
+        """Runs the filter chain, with a dispatch at the bottom of it.
+
+        **Which dispatch is a parameter**, and that is the whole difference
+        between a call starting here and one arriving from another node. A
+        local call routes and may forward; a delivered one must not, because
+        the sender already did. Everything above the bottom - the filters,
+        the deadline - is the same for both, and it was not so until a test
+        watched a deadline cross the wire and be enforced by nobody.
 
         Args:
             call: What is being invoked.
+            terminal: What to do once the filters have had their turn.
 
         Returns:
             Whatever the grain returned.
@@ -388,13 +401,13 @@ class Runtime:
 
         async def dispatch(inner: Call) -> Any:  # noqa: ANN401 - the grain's own
             if inner.deadline is None:
-                return await self._dispatch(inner.grain, inner.method, inner.args, inner.kwargs)
+                return await terminal(inner.grain, inner.method, inner.args, inner.kwargs)
             left = inner.deadline - self._clock()
             if left <= 0:
                 raise DeadlineExceeded(str(inner.grain), inner.method)
             try:
                 async with asyncio.timeout(left):
-                    return await self._dispatch(inner.grain, inner.method, inner.args, inner.kwargs)
+                    return await terminal(inner.grain, inner.method, inner.args, inner.kwargs)
             except TimeoutError as exc:
                 raise DeadlineExceeded(str(inner.grain), inner.method) from exc
 
@@ -493,9 +506,41 @@ class Runtime:
             Whatever the grain returned.
         """
         if timeout is None:
-            return await self._dispatch_here(grain_id, method, args, kwargs)
+            return await self._served_here(grain_id, method, args, kwargs)
         with deadline(timeout, clock=self._clock):
+            return await self._served_here(grain_id, method, args, kwargs)
+
+    async def _served_here(
+        self,
+        grain_id: GrainId,
+        method: str,
+        args: tuple[Any, ...],
+        kwargs: dict[str, Any],
+    ) -> Any:  # noqa: ANN401 - the grain's own
+        """Serves a delivered call through the filters and the deadline.
+
+        The same treatment a local call gets, minus the routing. Skipping it
+        was a defect: a deadline that crossed the wire was put into the
+        context on arrival and then enforced by nobody, so the only thing
+        stopping a slow remote call was the client's own timeout - and what
+        came back was a cancellation rather than a deadline.
+
+        Args:
+            grain_id: Which grain, already routed.
+            method: Which of its methods.
+            args: Positional arguments.
+            kwargs: Keyword arguments.
+
+        Returns:
+            Whatever the grain returned.
+        """
+        at = current_deadline()
+        if not self._filters and at is None:
             return await self._dispatch_here(grain_id, method, args, kwargs)
+        return await self._through_filters(
+            Call(grain=grain_id, method=method, args=args, kwargs=kwargs, deadline=at),
+            self._dispatch_here,
+        )
 
     async def _dispatch_here(
         self,

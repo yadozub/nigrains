@@ -85,10 +85,22 @@ tests measure.
 **A deadline crosses the hop as seconds remaining, not as a deadline.** A
 monotonic reading on one machine means nothing on another.
 
-`StaticMembership` and `LoopbackTransport` ship: between them they run the
-whole cluster in one process, which is how everything above is tested.
-Membership over a real network and a transport over a real socket arrive as
-optional extras, so the core keeps its zero dependencies.
+Two implementations of each ship. `StaticMembership` and
+`LoopbackTransport` run the whole cluster in one process, which is how the
+behaviour above is tested. For a real fleet:
+
+```python
+pip install nigrains[valkey,http]
+```
+
+`ValkeyMembership` keeps a key per node with a lease and refreshes it —
+**nobody decides that anybody else has died**, a node stops being a member
+because it stopped saying it was one, which removes the failure detector and
+the argument about who is right. `HttpTransport` forwards a call, and
+`asgi_app(runtime)` is the bare ASGI endpoint that answers it, mountable in
+whatever the host already runs.
+
+The core keeps its zero dependencies: a single-node user installs neither.
 
 **A clustered runtime refuses a grain that says it cannot survive two of
 itself.** At boot, rather than at the first partition — see below.

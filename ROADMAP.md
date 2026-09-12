@@ -37,6 +37,10 @@ eviction.
 **0.3.1** — `nigrains.testing`, the adversarial scenarios packaged, and
 `Grain.tolerates_double_activation` for the one they cannot guess.
 
+**0.9.0** — `nigrains[valkey]` and `nigrains[http]`: membership by lease,
+a transport over HTTP with a bare ASGI endpoint, and a codec port with JSON
+as the default.
+
 **0.8.0** — placement by consistent hash, forwarding, and the boot refusal
 for a grain that cannot survive two of itself. `StaticMembership` and
 `LoopbackTransport` run the whole thing in one process.
@@ -183,7 +187,7 @@ one process, so every behaviour below is tested before a socket exists.
 
 ---
 
-## Next — the cluster, for real
+## ~~The cluster, for real~~ — shipped in 0.9.0
 
 Optional extras, so the core keeps its zero dependencies and a single-node
 user pays nothing for a cluster they do not run:
@@ -199,13 +203,18 @@ middle of a call, and a partition. That means Docker and multi-process
 integration tests, and that is the bulk of this milestone. Without them,
 "the cluster works" is a claim.
 
-**No node decides alone that another has died.** A node that cannot reach a
-peer asks the others; the peer leaves the ring only when nobody can reach
-it. This is the mark phase of a collector borrowed on purpose - liveness as
-reachability from several roots rather than from one - and the reason is not
-courtesy to the unreachable node but the cost of being wrong: a false death
-rebalances, and a rebalance moves grains. One bad link between two nodes
-must not move the fleet.
+**No node decides alone that another has died, and in the end nobody
+decides at all.** The plan here was indirect probing - a node that cannot
+reach a peer asks the others, and the peer leaves the ring only when nobody
+can reach it, the mark phase of a collector borrowed on purpose. What
+shipped instead makes the question moot: with a lease in a shared store, a
+node stops being a member because it stopped saying it was one. There is no
+peer opinion, so there is nothing to disagree about, and the failure
+detector that indirect probing exists to correct is not there to correct.
+
+The trade is a dependency on something that must be up anyway, and it is the
+right one for a fleet that already runs a cache. Indirect probing comes back
+if a gossip membership ever does.
 
 The same borrowing carries a warning. A collector has a stop-the-world
 pause; a cluster's is the rebalance. The discipline that made the idle sweep
@@ -231,7 +240,7 @@ wrong trade.
 
 ---
 
-## Last — reminders
+## Next — reminders
 
 A schedule that survives deactivation: a timer, plus 0.4 to remember it,
 plus a cluster to decide whose turn it is. Last because it cannot be

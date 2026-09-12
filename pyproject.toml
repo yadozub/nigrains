@@ -1,6 +1,6 @@
 [project]
 name = "nigrains"
-version = "0.8.0"
+version = "0.9.0"
 description = "Virtual actors for asyncio: grains addressed by identity, activated on demand."
 readme = "README.md"
 requires-python = ">=3.14"
@@ -20,9 +20,13 @@ classifiers = [
 # Deliberately none. A runtime whose whole job is to decide when an object
 # exists has no business bringing anything with it, and the moment it does,
 # the "extract it and use it anywhere" property this package exists for is
-# gone. Distribution (a directory, a transport) arrives as an extra, behind
-# a port, and never as a hard requirement.
+# gone. Distribution arrives as an extra, behind a port, and never as a hard
+# requirement: a single-node user pays nothing for a cluster they do not run.
 dependencies = []
+
+[project.optional-dependencies]
+http = ["httpx>=0.28"]
+valkey = ["redis>=5.2"]
 
 [project.urls]
 Homepage = "https://github.com/yadozub/nigrains"
@@ -43,6 +47,10 @@ dev = [
     "pytest-asyncio>=0.25",
     "ruff>=0.9",
     "mypy>=1.14",
+    # The extras, so the suite exercises what a user of them would get.
+    "httpx>=0.28",
+    "redis>=5.2",
+    "testcontainers>=4.9",
 ]
 
 [tool.pytest.ini_options]

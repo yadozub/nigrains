@@ -37,6 +37,9 @@ eviction.
 **0.3.1** — `nigrains.testing`, the adversarial scenarios packaged, and
 `Grain.tolerates_double_activation` for the one they cannot guess.
 
+**0.5.0** — timers, and stateless workers. The call path is finished: a
+call can be wrapped, given a deadline, scheduled, or spread over a pool.
+
 **0.4.0** — the floor is Python 3.14. Not for syntax: free-threading is
 supported rather than experimental there, and the unwritten parts of the
 list below - stateless workers, CPU-bound grains - are exactly the parts a
@@ -47,7 +50,7 @@ everybody.
 
 ---
 
-## Next — the call path, finished
+## ~~The call path~~ — finished in 0.5.0
 
 All local, all cheap, and all of it must exist **before** the cluster: a
 transport has to respect these, and adding them afterwards means doing them
@@ -113,7 +116,7 @@ package refuses to ship.
 
 ---
 
-## Then — state, with the concurrency answer attached
+## Next — state, with the concurrency answer attached
 
 **This was refused in the first draft of this file, and the refusal was half
 right.** What Orleans gives is a storage provider, serialization, and an

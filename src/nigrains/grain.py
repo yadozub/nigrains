@@ -13,7 +13,10 @@ the system it was written for.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import ClassVar
+from typing import TYPE_CHECKING, ClassVar
+
+if TYPE_CHECKING:
+    from collections.abc import Awaitable, Callable
 
 
 @dataclass(frozen=True, slots=True)
@@ -89,11 +92,25 @@ class Grain:
             Read today by the conformance kit, which skips the scenario
             comparing two activations for a grain that never claimed to
             survive them.
+        stateless_workers: How many activations answer for one key, or 0 -
+            the default - for the model's own rule of one.
+
+            **The one place this package lets identity stop meaning one
+            activation**, and it is for work that has no state to protect:
+            something CPU-bound, or a fan-out where what matters is how many
+            can run rather than which one does. A pool of eight answers
+            eight calls at once where a serialised grain answers one, and a
+            reentrant grain answers eight on one event loop, which is not
+            the same thing at all when the work is not waiting on anything.
+
+            The wrong shape for everything else. A grain with state and a
+            pool is eight copies of that state, disagreeing.
     """
 
     grain_type: ClassVar[str] = ""
     reentrant: ClassVar[bool] = False
     tolerates_double_activation: ClassVar[bool] = False
+    stateless_workers: ClassVar[int] = 0
 
     def __init__(self, grain_id: GrainId) -> None:
         """Binds the activation to its identity.
@@ -102,6 +119,42 @@ class Grain:
             grain_id: Which grain this is an activation of.
         """
         self.id = grain_id
+        self._timers: list[tuple[float, Callable[[], Awaitable[None]]]] = []
+
+    def every(self, seconds: float, work: Callable[[], Awaitable[None]]) -> None:
+        """Runs something on a schedule for as long as this activation lives.
+
+        Asked for from :meth:`activate`, which is the only place it makes
+        sense: the runtime starts the timers once activation has succeeded,
+        and stops them when the activation goes.
+
+            async def activate(self) -> None:
+                self.prices = await self.load()
+                self.every(60.0, self.refresh)
+
+        **A timer does not keep its grain alive.** Ticking is not being
+        used: a grain nobody calls is collected on the usual schedule and
+        its timers stop with it. That is the whole difference between a
+        timer and a reminder, and a timer that prevented collection would
+        turn one call into a grain that lives for ever.
+
+        **A tick already running does delay deactivation**, for the same
+        reason a call does: finishing under a ``deactivate()`` that has
+        already released what the tick is using is the failure the in-flight
+        count exists to prevent.
+
+        A tick that raises is logged and the schedule continues. A timer
+        that died silently would be worse, and one that took its grain down
+        would be worse still.
+
+        Args:
+            seconds: How long between ticks. The first tick is one interval
+                after activation, not immediately - a grain that wants
+                something done at once does it in ``activate``.
+            work: What to run. Takes nothing: it is a method of the grain,
+                which already has everything.
+        """
+        self._timers.append((seconds, work))
 
     async def activate(self) -> None:
         """Prepares the activation before its first call is served.

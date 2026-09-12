@@ -111,11 +111,16 @@ class _Activation:
             one event loop is safe because the check and the assignment
             have no await between them.
         in_flight: Calls currently running, so an idle sweep can tell a
-            slow grain from an unused one.
-        last_used: When the most recent call finished.
+            slow grain from an unused one. A tick of a timer counts here
+            too, so that deactivation waits for one in progress.
+        last_used: When the most recent call finished. A tick does **not**
+            move it: ticking is not being used, and a grain whose timer
+            kept it alive would never be collected.
+        timers: The tasks running this grain's schedules, cancelled when
+            the activation goes.
     """
 
-    __slots__ = ("failure", "grain", "in_flight", "last_used", "lock", "ready")
+    __slots__ = ("failure", "grain", "in_flight", "last_used", "lock", "ready", "timers")
 
     def __init__(self, grain: Grain, *, now: float) -> None:
         """Prepares an activation that has not run its hook yet.
@@ -130,6 +135,7 @@ class _Activation:
         self.lock: asyncio.Lock | None = None
         self.in_flight = 0
         self.last_used = now
+        self.timers: list[asyncio.Task[None]] = []
 
 
 @dataclass(frozen=True, slots=True)
@@ -214,6 +220,8 @@ class Runtime:
             clock: Monotonic source of the current time.
         """
         self._factories: dict[str, GrainFactory] = {}
+        self._kinds: dict[str, type[Grain]] = {}
+        self._next_worker: dict[GrainId, int] = {}
         self._filters = tuple(filters)
         self._activations: OrderedDict[GrainId, _Activation] = OrderedDict()
         self._idle_seconds = idle_seconds
@@ -255,7 +263,10 @@ class Runtime:
             raise ValueError(f"{grain.__name__} declares no grain_type, so it has no address")
         if grain_type in self._factories:
             raise ValueError(f"grain type {grain_type!r} is already registered")
+        if grain.stateless_workers < 0:
+            raise ValueError(f"{grain.__name__} asks for a negative pool of workers")
         self._factories[grain_type] = factory if factory is not None else grain
+        self._kinds[grain_type] = grain
 
     def reference[G: Grain](self, grain: type[G], key: str) -> G:
         """Returns a reference to one grain, typed as that grain.
@@ -372,7 +383,7 @@ class Runtime:
             GrainNotRegisteredError: No factory for that type.
             NoSuchGrainMethodError: The grain has no such method.
         """
-        activation = await self._activated(grain_id)
+        activation = await self._activated(self._route(grain_id))
         target = getattr(activation.grain, method, None)
         if target is None or not callable(target) or method.startswith("_"):
             raise NoSuchGrainMethodError(str(grain_id), method)
@@ -384,6 +395,34 @@ class Runtime:
                 activation.lock = asyncio.Lock()
             async with activation.lock:
                 return await target(*args, **kwargs)
+
+    def _route(self, grain_id: GrainId) -> GrainId:
+        """Turns the identity a caller used into the one that answers.
+
+        The same identity for every kind but a stateless worker, whose
+        callers are spread over its pool in turn.
+
+        **The worker's key is the caller's with an index on it**, which can
+        collide with a key somebody chose - ``"a"`` with eight workers
+        reaches ``"a#0"`` through ``"a#7"``, and a caller who names ``"a#3"``
+        lands on one of them. That is allowed to happen because it cannot
+        matter: a stateless worker has no state, and which one answers is
+        the question the whole kind exists to make uninteresting. For any
+        grain where it would matter, the pool is zero and this returns what
+        it was given.
+
+        Args:
+            grain_id: What the caller asked for.
+
+        Returns:
+            What will answer.
+        """
+        kind = self._kinds.get(grain_id.type)
+        if kind is None or kind.stateless_workers <= 0:
+            return grain_id
+        turn = self._next_worker.get(grain_id, 0)
+        self._next_worker[grain_id] = (turn + 1) % kind.stateless_workers
+        return GrainId(grain_id.type, f"{grain_id.key}#{turn}")
 
     async def _activated(self, grain_id: GrainId) -> _Activation:
         """Returns the activation for an identity, building one if needed.
@@ -441,11 +480,54 @@ class Runtime:
             if activation.ready is not None:
                 activation.ready.set()
             raise
+        self._start_timers(activation)
         if activation.ready is not None:
             activation.ready.set()
             activation.ready = None
         log.debug("activated %s", grain_id)
         return activation
+
+    def _start_timers(self, activation: _Activation) -> None:
+        """Starts whatever the grain asked for in ``activate``.
+
+        Args:
+            activation: The grain that has just been built.
+        """
+        for seconds, work in activation.grain._timers:
+            activation.timers.append(asyncio.create_task(self._tick(activation, seconds, work)))
+
+    async def _tick(
+        self,
+        activation: _Activation,
+        seconds: float,
+        work: Callable[[], Awaitable[None]],
+    ) -> None:
+        """Runs one schedule until the activation goes.
+
+        The tick counts as in flight so that deactivation waits for it, and
+        does not touch ``last_used`` so that ticking never looks like use.
+
+        Args:
+            activation: Whose schedule this is.
+            seconds: Interval between ticks.
+            work: What to run.
+        """
+        while True:
+            await asyncio.sleep(seconds)
+            activation.in_flight += 1
+            self._in_flight += 1
+            try:
+                await work()
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                # Logged and the schedule continues. A timer that died
+                # silently would be worse, and one that took its grain
+                # down with it worse still.
+                log.exception("a timer of %s failed", activation.grain.id)
+            finally:
+                activation.in_flight -= 1
+                self._in_flight -= 1
 
     @contextmanager
     def _counted(self, activation: _Activation) -> Iterator[None]:
@@ -556,6 +638,12 @@ class Runtime:
         activation = self._activations.pop(grain_id, None)
         if activation is None:
             return
+        for timer in activation.timers:
+            timer.cancel()
+        for timer in activation.timers:
+            with suppress(asyncio.CancelledError):
+                await timer
+        activation.timers.clear()
         try:
             await activation.grain.deactivate()
         except Exception:

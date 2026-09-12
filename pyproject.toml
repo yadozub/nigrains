@@ -1,6 +1,6 @@
 [project]
 name = "nigrains"
-version = "0.4.0"
+version = "0.5.0"
 description = "Virtual actors for asyncio: grains addressed by identity, activated on demand."
 readme = "README.md"
 requires-python = ">=3.14"

@@ -94,6 +94,31 @@ For the common case that is not a compromise. A grain fronting immutable
 data is a cache: two activations hold the same thing and answer the same
 way. That is what makes the model affordable without a membership protocol.
 
+## Around a call
+
+`Runtime(filters=[...])` wraps every call, outermost first — logging,
+tracing, retry, authorisation. `with deadline(2.0):` limits the calls made
+inside it, **including the calls a grain makes to another grain**, because it
+rides in a context variable; a grain can ask `remaining()` and shorten its
+own work rather than being cut off.
+
+A grain schedules its own work with `self.every(60.0, self.refresh)` from
+`activate`. A timer dies with the activation — that is the whole difference
+between a timer and a reminder — and ticking does not keep a grain alive,
+though a tick already running does delay its deactivation.
+
+And a kind with no state to protect can be a pool:
+
+```python
+class Render(Grain):
+    grain_type = "render"
+    stateless_workers = 8
+```
+
+Eight activations answer for one key, in turn. The right shape for
+CPU-bound or fan-out work, and the wrong shape for anything with state —
+a pool of eight is eight copies of that state, disagreeing.
+
 ## Checking your own grain
 
 The scenarios that found every real defect in this package ship with it, so

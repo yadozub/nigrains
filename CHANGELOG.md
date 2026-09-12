@@ -1,5 +1,29 @@
 # Changelog
 
+## 0.5.0 — 2026-09-12
+
+The call path is finished: a call can now be wrapped, given a deadline,
+scheduled, or spread over a pool.
+
+- **Timers.** `self.every(60.0, self.refresh)` from `activate`, and the
+  runtime runs it for as long as the activation lives. Two rules that are
+  the whole design: **ticking does not keep a grain alive** — otherwise one
+  call becomes a grain that lives for ever — and **a tick already running
+  does delay deactivation**, because finishing under a `deactivate()` that
+  has released what the tick was using is the failure the in-flight count
+  exists to prevent. A tick that raises is logged and the schedule
+  continues.
+- **Stateless workers.** `stateless_workers = 8` on the class, and eight
+  activations answer for one key, in turn. The one place this package lets
+  identity stop meaning one activation, and it is for work with no state to
+  protect. A worker's key is the caller's with an index appended, so a
+  caller naming `"a#3"` can land on a worker of `"a"` — allowed because it
+  cannot matter: which worker answers is the question the kind exists to
+  make uninteresting.
+
+Dispatch costs about 0.04 µs more, for the lookup that decides whether a
+kind has a pool.
+
 ## 0.4.0 — 2026-09-12
 
 **The floor is Python 3.14.** Not for syntax — nothing here needed 3.14 to

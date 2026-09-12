@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import asyncio
+import time
+from collections.abc import Callable
 from typing import Any
 
 from nigrains import Grain, Runtime
@@ -63,6 +65,31 @@ class SlowTick(Grain):
         return "pong"
 
 
+async def _until(condition: Callable[[], bool], *, within: float = 2.0) -> None:
+    """Waits for something to become true, rather than for a fixed span.
+
+    **Sleeping for three intervals and hoping is how a timer test becomes
+    flaky**, and this one did: the whole suite on a loaded machine gave the
+    event loop less than the arithmetic assumed, and a passing test failed
+    once in a hundred runs. Waiting for the condition takes the same time
+    when the machine is idle and does not lie when it is not.
+
+    Args:
+        condition: What is being waited for.
+        within: Seconds before giving up, generous enough that reaching it
+            means something is actually wrong.
+
+    Raises:
+        AssertionError: It never became true.
+    """
+    deadline = time.monotonic() + within
+    while time.monotonic() < deadline:
+        if condition():
+            return
+        await asyncio.sleep(TICK / 4)
+    raise AssertionError(f"condition never held within {within}s")
+
+
 def _runtime(
     grain: type[Grain],
     probe: list[Any] | None = None,
@@ -105,13 +132,13 @@ def _kept(store: list[Any], grain: Grain) -> Grain:
 
 
 async def test_a_timer_runs_while_the_grain_is_activated() -> None:
-    runtime = _runtime(Ticking)
+    grains: list[Ticking] = []
+    runtime = _runtime(Ticking, grains)
     counter = runtime.reference(Ticking, "a")
 
     assert await counter.count() == 0, "the first tick is one interval away, not immediate"
-    await asyncio.sleep(TICK * 3.5)
 
-    assert await counter.count() >= 2
+    await _until(lambda: grains[0].ticks >= 2)
 
 
 async def test_a_timer_stops_with_the_activation() -> None:
@@ -120,7 +147,7 @@ async def test_a_timer_stops_with_the_activation() -> None:
     runtime = _runtime(Ticking, grains, idle_seconds=-1.0)
 
     await runtime.reference(Ticking, "a").count()
-    await asyncio.sleep(TICK * 2.5)
+    await _until(lambda: grains[0].ticks >= 1)
     assert await runtime.collect() == 1
 
     stopped_at = grains[0].ticks
@@ -132,7 +159,7 @@ async def test_a_timer_does_not_keep_its_grain_alive() -> None:
     """Ticking is not being used. Otherwise one call is a grain for ever."""
     runtime = _runtime(Ticking, idle_seconds=-1.0)
     await runtime.reference(Ticking, "a").count()
-    await asyncio.sleep(TICK * 3)
+    await _until(lambda: bool(runtime.activated))
 
     assert await runtime.collect() == 1
     assert runtime.activated == 0
@@ -145,8 +172,7 @@ async def test_a_tick_in_progress_delays_deactivation() -> None:
 
     async with runtime:
         await runtime.reference(SlowTick, "a").ping()
-        await asyncio.sleep(TICK * 2)
-        assert grains[0].inside, "the tick is running"
+        await _until(lambda: grains[0].inside)
         grains[0].release.set()
 
     assert grains[0].finished, "shutdown waited for the tick rather than cutting it"
@@ -156,14 +182,13 @@ async def test_a_tick_that_raises_does_not_stop_the_schedule() -> None:
     """A timer that died silently would be worse; one that took the grain
     down with it, worse still.
     """
-    runtime = _runtime(Failing)
+    grains: list[Failing] = []
+    runtime = _runtime(Failing, grains)
     counter = runtime.reference(Failing, "a")
     # Activating it first: a reference is an address, and the grain does not
     # exist - so nor does its schedule - until something calls it.
     assert await counter.count() == 0
-    await asyncio.sleep(TICK * 3.5)
-
-    assert await counter.count() >= 2
+    await _until(lambda: grains[0].attempts >= 2)
     assert runtime.activated == 1, "the grain is still there"
 
 

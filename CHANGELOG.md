@@ -1,5 +1,32 @@
 # Changelog
 
+## 0.7.0 — 2026-09-12
+
+**State, and the answer to what happens when two activations write it.**
+
+`Grain.persistent = True` and the runtime reads the grain's state before
+`activate`, so it finds it already there. `Runtime(state=...)` takes any
+store with three operations — read, write, delete — and every one of them
+carries a version.
+
+The version is the point. This package refuses to be a storage library:
+where the bytes go and how they are serialized are things every user already
+has an opinion about, and `InMemoryStateStore` ships for tests and for one
+process while no backend does. But refusing the version would have been a
+different thing entirely. The cluster admits that single activation is best
+effort under a partition, and a package that allows two activations while
+offering no way to notice them both writing has handed its users a trap with
+no floor. `save` raises `ConcurrentChange`; the recovery is reload,
+re-apply, write again.
+
+Two smaller decisions, both stated where they are made. **Nothing is saved
+automatically** — writing on deactivation writes on every collection, hides
+the failure when the write fails, and turns an eviction into a round trip.
+And **only a grain that declares `persistent` is read**, so a fleet of caches
+never pays a round trip for a store it does not use. A grain that declares
+it while its runtime has no store is refused at registration rather than at
+the first activation in production.
+
 ## 0.6.0 — 2026-09-12
 
 **`stateless_workers` is now `activations_per_key`.** Breaking, and only a

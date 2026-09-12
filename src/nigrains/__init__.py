@@ -21,6 +21,13 @@ from nigrains.call import Call, CallFilter, DeadlineExceeded, deadline, remainin
 from nigrains.errors import GrainError, GrainNotRegisteredError, NoSuchGrainMethodError
 from nigrains.grain import Grain, GrainId
 from nigrains.runtime import Runtime, Stats
+from nigrains.state import (
+    ConcurrentChange,
+    GrainState,
+    InMemoryStateStore,
+    StateStore,
+    Stored,
+)
 
 # So that a host which configured no logging sees no "no handlers" noise,
 # and one which did sees everything. The library's own level is left
@@ -30,14 +37,19 @@ logging.getLogger(__name__).addHandler(logging.NullHandler())
 __all__ = [
     "Call",
     "CallFilter",
+    "ConcurrentChange",
     "DeadlineExceeded",
     "Grain",
     "GrainError",
     "GrainId",
     "GrainNotRegisteredError",
+    "GrainState",
+    "InMemoryStateStore",
     "NoSuchGrainMethodError",
     "Runtime",
+    "StateStore",
     "Stats",
+    "Stored",
     "deadline",
     "remaining",
 ]

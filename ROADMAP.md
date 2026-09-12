@@ -37,6 +37,12 @@ eviction.
 **0.3.1** — `nigrains.testing`, the adversarial scenarios packaged, and
 `Grain.tolerates_double_activation` for the one they cannot guess.
 
+**0.7.0** — state, with the version that makes two writers a detected
+conflict rather than a lost update. A port of three operations, an in-memory
+store, and no backends.
+
+**0.6.0** — `stateless_workers` became `activations_per_key`.
+
 **0.5.0** — timers, and pooled activations. The call path is finished: a
 call can be wrapped, given a deadline, scheduled, or spread over a pool.
 
@@ -116,7 +122,7 @@ package refuses to ship.
 
 ---
 
-## Next — state, with the concurrency answer attached
+## ~~State~~ — shipped in 0.7.0
 
 **This was refused in the first draft of this file, and the refusal was half
 right.** What Orleans gives is a storage provider, serialization, and an
@@ -137,7 +143,7 @@ serialization stays theirs. What this package owes them is the semantics.
 
 ---
 
-## Then — the cluster, without a network
+## Next — the cluster, without a network
 
 The design errors live here and are cheapest here, so this is a milestone of
 its own.

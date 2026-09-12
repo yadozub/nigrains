@@ -18,6 +18,8 @@ from typing import TYPE_CHECKING, ClassVar
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
 
+    from nigrains.state import GrainState
+
 
 @dataclass(frozen=True, slots=True)
 class GrainId:
@@ -92,6 +94,15 @@ class Grain:
             Read today by the conformance kit, which skips the scenario
             comparing two activations for a grain that never claimed to
             survive them.
+        persistent: Whether this grain keeps state in the runtime's store.
+            Default False, and the default costs nothing: only a grain that
+            says otherwise is read before it activates, so a fleet of caches
+            never pays for a store it does not use.
+
+            A grain that says True and is registered with a runtime that has
+            no store is refused at registration, because the alternative is
+            discovering it on the first activation of the first grain in
+            production.
         activations_per_key: How many activations answer for one key, or 0 -
             the default - for the model's own rule of one.
 
@@ -126,6 +137,32 @@ class Grain:
     reentrant: ClassVar[bool] = False
     tolerates_double_activation: ClassVar[bool] = False
     activations_per_key: ClassVar[int] = 0
+    persistent: ClassVar[bool] = False
+
+    @property
+    def state(self) -> GrainState:
+        """This grain's own stored state.
+
+        Attached by the runtime before ``activate`` runs, so a grain reads
+        what it had without knowing where it was kept.
+
+        Returns:
+            The handle.
+
+        Raises:
+            RuntimeError: This grain did not declare ``persistent``, or the
+                runtime holding it has no store. Both are configuration
+                mistakes rather than runtime conditions, and both say so
+                here rather than raising AttributeError somewhere further
+                on.
+        """
+        if self._state is None:
+            raise RuntimeError(
+                f"{type(self).__name__} has no state: it declares "
+                f"persistent = {self.persistent!r} and its runtime "
+                f"{'has no store' if self.persistent else 'was never asked for one'}"
+            )
+        return self._state
 
     def __init__(self, grain_id: GrainId) -> None:
         """Binds the activation to its identity.
@@ -135,6 +172,7 @@ class Grain:
         """
         self.id = grain_id
         self._timers: list[tuple[float, Callable[[], Awaitable[None]]]] = []
+        self._state: GrainState | None = None
 
     def every(self, seconds: float, work: Callable[[], Awaitable[None]]) -> None:
         """Runs something on a schedule for as long as this activation lives.

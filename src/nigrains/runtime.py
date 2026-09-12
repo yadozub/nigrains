@@ -47,6 +47,7 @@ from nigrains.call import Call, CallFilter, DeadlineExceeded, current_deadline
 from nigrains.errors import GrainNotRegisteredError, NoSuchGrainMethodError
 from nigrains.grain import Grain, GrainId
 from nigrains.reference import reference_to
+from nigrains.state import GrainState, StateStore
 
 log = logging.getLogger(__name__)
 """Named after the module, with no handler and no level.
@@ -192,6 +193,7 @@ class Runtime:
         drain_seconds: float = 30.0,
         max_activations: int | None = None,
         filters: Sequence[CallFilter] = (),
+        state: StateStore | None = None,
         clock: Callable[[], float] = time.monotonic,
     ) -> None:
         """Builds an empty runtime.
@@ -217,8 +219,13 @@ class Runtime:
                 runtime from outside. Empty by default, and an empty chain
                 costs nothing - the dispatch path is unchanged when there
                 are no filters and no deadline.
+            state: Where grains that declare ``persistent`` keep their
+                state. None is a runtime that holds no such grains, and
+                registering one is then refused rather than discovered at
+                the first activation.
             clock: Monotonic source of the current time.
         """
+        self._state = state
         self._factories: dict[str, GrainFactory] = {}
         self._kinds: dict[str, type[Grain]] = {}
         self._next_activation: dict[GrainId, int] = {}
@@ -265,6 +272,10 @@ class Runtime:
             raise ValueError(f"grain type {grain_type!r} is already registered")
         if grain.activations_per_key < 0:
             raise ValueError(f"{grain.__name__} asks for a negative number of activations per key")
+        if grain.persistent and self._state is None:
+            raise ValueError(
+                f"{grain.__name__} declares persistent and this runtime has no state store"
+            )
         self._factories[grain_type] = factory if factory is not None else grain
         self._kinds[grain_type] = grain
 
@@ -469,6 +480,13 @@ class Runtime:
         self._activations[grain_id] = activation
         self._activations_total += 1
         try:
+            if activation.grain.persistent and self._state is not None:
+                # Read before the hook, so a grain finds its own state
+                # already there rather than having to fetch it - and only
+                # for a grain that asked, so nothing else pays a round trip.
+                activation.grain._state = GrainState(
+                    self._state, grain_id, await self._state.read(grain_id)
+                )
             await activation.grain.activate()
         except BaseException as exc:
             # Nothing half-built is left behind: the entry goes, and the

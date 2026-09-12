@@ -127,6 +127,37 @@ worth saying rather than hiding: this is the one kind where identity is
 admitted not to matter. If your work has a natural key, use the key. Many
 grains is what this is good at; a pool is what it falls back to.
 
+## State, and what happens when two write it
+
+A grain that keeps something says so, and finds it already there:
+
+```python
+class Basket(Grain):
+    grain_type = "basket"
+    persistent = True
+
+    async def activate(self) -> None:
+        self.items = self.state.data or []
+
+    async def add(self, item: str) -> None:
+        self.items.append(item)
+        await self.state.save(self.items)
+```
+
+**Where the bytes go is not this package's business, and the conflict is.**
+`Runtime(state=...)` takes any store with three operations; `InMemoryStateStore`
+ships for tests and for one process, and no others do — serialization and
+storage are things every user already has an opinion about.
+
+What is not optional is the version travelling with the data. A cluster
+admits two activations of one grain under a partition, so a package that
+allows two and offers no way to notice them both writing has handed you a
+trap with no floor. `save` raises `ConcurrentChange` instead, and the
+recovery is to reload, re-apply and write again.
+
+Nothing is saved automatically: writing on deactivation would write on every
+collection and hide the failure when the write fails.
+
 ## Checking your own grain
 
 The scenarios that found every real defect in this package ship with it, so

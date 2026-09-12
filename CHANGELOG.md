@@ -1,5 +1,28 @@
 # Changelog
 
+## 0.3.1 — 2026-09-12
+
+**`nigrains.testing` — the adversarial scenarios, packaged.** Every real
+defect this package has had was found the same way, and none of those
+scenarios was specific to the grain that found them: anybody who writes a
+grain meets the same conditions and nobody thinks to write the test. So they
+ship. `check_conformance(GrainClass, lambda ref: ref.something())` runs the
+battery against your grain in your own suite.
+
+What it checks is the grain rather than the runtime, which has its own
+tests: that a herd builds one activation, that the answer survives being
+deactivated and rebuilt, that declared reentrancy is real, that a spent
+deadline builds nothing, and that two activations agree for a grain that
+says they may exist.
+
+**`Grain.tolerates_double_activation`**, default False, because the last of
+those cannot be guessed. A cluster admits two activations of one identity
+under a partition; a grain fronting immutable data is unaffected and says
+so, and a grain whose state is the truth keeps the safe answer.
+
+`idempotent` is deliberately *not* added: it would be read by a retry filter
+and there is no retry filter yet.
+
 ## 0.3.0 — 2026-09-12
 
 The first half of the call path. Both of these had to exist before a

@@ -60,6 +60,44 @@ everything else, which the documentation will say in those words.
 
 ---
 
+## 0.3.x — `nigrains.testing`, a conformance kit
+
+**Every real defect this package has had was found the same way: an
+adversarial scenario.** A cancelled waiter poisoning a shared activation. A
+sweep collecting a grain mid-activation. A shutdown running under a live
+call. None of them is specific to the grain that found them — anybody who
+writes a grain meets the same three, and nobody thinks to test for them.
+
+So the scenarios ship. A user hands their grain class and one representative
+call, and gets the battery run against it:
+
+- a herd on a cold grain activates it once;
+- a waiter that gives up does not take the activation with it;
+- nothing is deactivated under a running call;
+- the reentrancy the class declares is the reentrancy it gets — overlap
+  where it claims overlap, and none where it does not;
+- a deadline already gone refuses before anything is built;
+- and, for a grain that says it can, two activations of one identity answer
+  the same.
+
+Watching overlap turned out to need care, and the first attempt was wrong in
+a way worth keeping here: a call filter sits *outside* dispatch, so it counts
+callers queueing for a serialised grain's lock rather than callers inside it,
+and a correctly serialised grain failed. The count belongs in a subclass of
+the grain, and the test written to prove the scenario could fail proved
+instead that it always did.
+
+**One declaration comes with it**, because the last scenario cannot be
+guessed: `Grain.tolerates_double_activation`, default False. A grain
+fronting immutable data says True and means it; everything else keeps the
+safe answer.
+
+`idempotent` is *not* added yet. It would be read by a retry filter, there
+is no retry filter, and a declaration nothing reads is the thing this
+package refuses to ship.
+
+---
+
 ## 0.4 — state, with the concurrency answer attached
 
 **This was refused in the first draft of this file, and the refusal was half
@@ -86,6 +124,28 @@ serialization stays theirs. What this package owes them is the semantics.
 The design errors live here and are cheapest here, so this is a milestone of
 its own.
 
+**There is nothing here to garbage-collect, and that is a design win worth
+naming.** Placement is computed from the membership rather than recorded in
+a directory, so there are no stale entries to expire, no table to recover
+and nothing to be inconsistent about. The question "what collects the
+directory" has the best possible answer: there is no directory.
+
+The same question about *activations* has a different answer, and the
+analogy fails there for a precise reason: a tracing collector needs a
+reachability graph, and addressing by identity means every grain is
+reachable from everywhere - `GrainId(type, key)` can be constructed out of
+thin air. There is nothing to mark. Idleness and least-recently-used are not
+a poor substitute for reachability; they are the only thing the model
+permits, and they are the same generational bet a collector makes anyway.
+
+**And the runtime refuses to start clustered with a grain that cannot
+survive it.** The roadmap admits below that single activation is best effort
+under a partition; a grain whose class says
+`tolerates_double_activation = False` is then incompatible with the
+deployment, and the honest moment to say so is boot, not the first split.
+This is where that check lands, because this is where there is finally a
+cluster to refuse.
+
 Ports for **membership** (who is alive), **directory** (who holds what) and
 **transport** (how a call reaches another node), with placement by
 consistent hash over the live members — every node computes the same answer
@@ -110,6 +170,18 @@ tested with unit tests: it needs several processes, a node killed in the
 middle of a call, and a partition. That means Docker and multi-process
 integration tests, and that is the bulk of this milestone. Without them,
 "the cluster works" is a claim.
+
+**No node decides alone that another has died.** A node that cannot reach a
+peer asks the others; the peer leaves the ring only when nobody can reach
+it. This is the mark phase of a collector borrowed on purpose - liveness as
+reachability from several roots rather than from one - and the reason is not
+courtesy to the unreachable node but the cost of being wrong: a false death
+rebalances, and a rebalance moves grains. One bad link between two nodes
+must not move the fleet.
+
+The same borrowing carries a warning. A collector has a stop-the-world
+pause; a cluster's is the rebalance. The discipline that made the idle sweep
+safe applies here too - incremental, and bounded in how long anybody waits.
 
 **What it will guarantee:** a grain is reachable by identity from any node;
 a node joining or leaving moves a share of the fleet and not all of it; a

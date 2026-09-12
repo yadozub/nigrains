@@ -94,6 +94,26 @@ For the common case that is not a compromise. A grain fronting immutable
 data is a cache: two activations hold the same thing and answer the same
 way. That is what makes the model affordable without a membership protocol.
 
+## Checking your own grain
+
+The scenarios that found every real defect in this package ship with it, so
+your grain meets them in your test suite rather than in production:
+
+```python
+from nigrains.testing import check_conformance
+
+async def test_my_grain_behaves():
+    await check_conformance(PriceGrain, lambda ref: ref.price_of("AAPL"))
+```
+
+A herd on a cold grain builds it once; the answer survives being deactivated
+and rebuilt — the commonest way a grain is wrong and invisible until the
+first collection in production; the reentrancy the class declares is the
+reentrancy it gets; a spent deadline builds nothing; and, for a grain that
+declares `tolerates_double_activation`, two activations of one identity
+agree. The call you hand it must be a pure read, because half of that
+compares one answer against another.
+
 ## What it costs
 
 Measured on Linux in a pinned container, every interpreter this package

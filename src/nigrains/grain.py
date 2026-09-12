@@ -74,10 +74,26 @@ class Grain:
             keystroke.
         reentrant: Whether calls may overlap. Default False, matching the
             model rather than matching our commonest grain.
+        tolerates_double_activation: Whether two activations of this
+            identity, in two processes at once, are harmless. **Default
+            False, which is the safe answer and the wrong one for a cache.**
+
+            A cluster cannot promise otherwise: two halves of a partition
+            each believe they own a share and each is right about its own
+            half. A grain fronting something immutable is unaffected - two
+            of it are two caches answering the same - and says so. A grain
+            whose state is the truth must not, and a runtime asked to
+            cluster one will refuse rather than let the first split find
+            out.
+
+            Read today by the conformance kit, which skips the scenario
+            comparing two activations for a grain that never claimed to
+            survive them.
     """
 
     grain_type: ClassVar[str] = ""
     reentrant: ClassVar[bool] = False
+    tolerates_double_activation: ClassVar[bool] = False
 
     def __init__(self, grain_id: GrainId) -> None:
         """Binds the activation to its identity.

@@ -37,6 +37,9 @@ eviction.
 **0.3.1** — `nigrains.testing`, the adversarial scenarios packaged, and
 `Grain.tolerates_double_activation` for the one they cannot guess.
 
+**0.10.0** — reminders: a schedule that outlives the activation that asked
+for it, fired by the node that owns the grain.
+
 **0.9.0** — `nigrains[valkey]` and `nigrains[http]`: membership by lease,
 a transport over HTTP with a bare ASGI endpoint, and a codec port with JSON
 as the default.
@@ -240,11 +243,34 @@ wrong trade.
 
 ---
 
-## Next — reminders
+## ~~Reminders~~ — shipped in 0.10.0
 
-A schedule that survives deactivation: a timer, plus 0.4 to remember it,
-plus a cluster to decide whose turn it is. Last because it cannot be
-earlier, not because it matters least.
+A schedule that survives deactivation: a timer, plus a store to remember it,
+plus a cluster to decide whose turn it is. Last because it could not be
+earlier, not because it mattered least.
+
+**Firing is a scan, not a wheel.** Each node looks at the store on an
+interval and fires what it owns and what is due. That makes the scan
+interval the worst lateness a reminder can have, which is the honest trade
+for a design with no timer heap to recover, nothing to hand over when a node
+leaves, and no way for two nodes to disagree about whose turn it was. A
+fleet that has been down does not come back to a backlog to stampede
+through: each reminder fires once, whatever it missed.
+
+**What it does not do.** Sub-second schedules — the scan interval is the
+resolution, and a grain wanting finer than that wants a timer. And a
+`cron`-shaped calendar: intervals only, because "the first Monday of the
+month, in the user's timezone, when that month has one" is a library of its
+own and there are good ones.
+
+---
+
+## Next
+
+The roadmap above is finished. What comes next is not a feature but the
+proof the cluster milestone admits it still owes: several processes, a node
+killed in the middle of a call, and a partition. Everything below the line
+stays below it.
 
 ---
 

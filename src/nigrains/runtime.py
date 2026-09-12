@@ -38,7 +38,7 @@ import time
 from collections import OrderedDict
 from collections.abc import Awaitable, Callable, Iterator, Sequence
 from contextlib import contextmanager, suppress
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from functools import partial
 from types import TracebackType
 from typing import Any, Self
@@ -54,6 +54,7 @@ from nigrains.cluster import Cluster
 from nigrains.errors import GrainNotRegisteredError, NoSuchGrainMethodError
 from nigrains.grain import Grain, GrainId
 from nigrains.reference import reference_to
+from nigrains.reminders import GrainReminders, ReminderStore
 from nigrains.state import GrainState, StateStore
 
 log = logging.getLogger(__name__)
@@ -207,6 +208,8 @@ class Runtime:
         filters: Sequence[CallFilter] = (),
         state: StateStore | None = None,
         cluster: Cluster | None = None,
+        reminders: ReminderStore | None = None,
+        reminder_scan_seconds: float = 5.0,
         clock: Callable[[], float] = time.monotonic,
     ) -> None:
         """Builds an empty runtime.
@@ -240,10 +243,18 @@ class Runtime:
                 that is the whole fleet. With one, a call to a grain this
                 node does not own is forwarded to the node that does, and
                 nothing above the call changes.
+            reminders: Where schedules that outlive an activation are kept,
+                or None for a runtime whose grains never ask for one.
+            reminder_scan_seconds: How often to look for reminders that
+                have come due. The interval is also the worst lateness a
+                reminder can have, so it trades promptness against a read.
             clock: Monotonic source of the current time.
         """
         self._state = state
         self._cluster = cluster
+        self._reminders = reminders
+        self._reminder_scan_seconds = reminder_scan_seconds
+        self._reminder_scanner: asyncio.Task[None] | None = None
         self._forwarded = 0
         self._factories: dict[str, GrainFactory] = {}
         self._kinds: dict[str, type[Grain]] = {}
@@ -650,6 +661,8 @@ class Runtime:
         self._activations[grain_id] = activation
         self._activations_total += 1
         try:
+            if self._reminders is not None:
+                activation.grain._reminders = GrainReminders(self._reminders, grain_id, self._clock)
             if activation.grain.persistent and self._state is not None:
                 # Read before the hook, so a grain finds its own state
                 # already there rather than having to fetch it - and only
@@ -761,6 +774,56 @@ class Runtime:
             "fleet is at its bound of %d and every grain is busy; activating anyway",
             self._max_activations,
         )
+
+    async def fire_due_reminders(self) -> int:
+        """Wakes the grains whose reminders have come due, on this node.
+
+        Public because a deployment that would rather drive the scan itself
+        - from its own scheduler, or in a test - should not have to reach
+        into a private method to do it.
+
+        **Only what this node owns.** Every node in a fleet scans the same
+        store, and each skips what the ring says is somebody else's, so a
+        reminder fires once rather than once per node. When the membership
+        changes the new owner picks it up on its next scan and the old one
+        stops; nothing is handed over, because nothing was held.
+
+        Returns:
+            How many were fired.
+        """
+        if self._reminders is None:
+            return 0
+        fired = 0
+        for reminder in await self._reminders.due(self._clock()):
+            if self._cluster is not None and not self._cluster.is_mine(reminder.grain):
+                continue
+            # Rescheduled before it runs, not after: a reminder whose
+            # handler takes longer than the interval would otherwise be
+            # found due again by the next scan and run twice at once.
+            if reminder.interval is None:
+                await self._reminders.drop(reminder.grain, reminder.name)
+            else:
+                await self._reminders.put(replace(reminder, due=self._clock() + reminder.interval))
+            try:
+                await self.call(reminder.grain, "on_reminder", reminder.name)
+            except Exception:
+                # Logged and the schedule stands, for the reason a failing
+                # timer does not stop ticking: one bad afternoon must not
+                # silently end a daily job.
+                log.exception("a reminder %r of %s failed", reminder.name, reminder.grain)
+            fired += 1
+        return fired
+
+    async def _scan_reminders(self) -> None:
+        """Looks for due reminders until cancelled."""
+        while True:
+            await asyncio.sleep(self._reminder_scan_seconds)
+            try:
+                await self.fire_due_reminders()
+            except Exception:
+                # A scanner that dies stops every schedule in the fleet on
+                # this node, and nothing would say so.
+                log.exception("the reminder scan failed")
 
     async def collect(self) -> int:
         """Deactivates every grain that is idle past the configured span.
@@ -878,6 +941,8 @@ class Runtime:
         if self._cluster is not None:
             await self._cluster.membership.start()
         self._sweeper = asyncio.create_task(self._sweep())
+        if self._reminders is not None:
+            self._reminder_scanner = asyncio.create_task(self._scan_reminders())
         return self
 
     async def __aexit__(
@@ -893,11 +958,13 @@ class Runtime:
             exc: The exception, if the block raised.
             traceback: Its traceback, if the block raised.
         """
-        if self._sweeper is not None:
-            self._sweeper.cancel()
-            with suppress(asyncio.CancelledError):
-                await self._sweeper
-            self._sweeper = None
+        for task in (self._sweeper, self._reminder_scanner):
+            if task is not None:
+                task.cancel()
+                with suppress(asyncio.CancelledError):
+                    await task
+        self._sweeper = None
+        self._reminder_scanner = None
         await self._drain()
         for grain_id in list(self._activations):
             await self._deactivate(grain_id)

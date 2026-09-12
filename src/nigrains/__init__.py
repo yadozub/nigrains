@@ -29,6 +29,12 @@ from nigrains.cluster import (
 )
 from nigrains.errors import GrainError, GrainNotRegisteredError, NoSuchGrainMethodError
 from nigrains.grain import Grain, GrainId
+from nigrains.reminders import (
+    GrainReminders,
+    InMemoryReminderStore,
+    Reminder,
+    ReminderStore,
+)
 from nigrains.runtime import Runtime, Stats
 from nigrains.state import (
     ConcurrentChange,
@@ -53,11 +59,15 @@ __all__ = [
     "GrainError",
     "GrainId",
     "GrainNotRegisteredError",
+    "GrainReminders",
     "GrainState",
+    "InMemoryReminderStore",
     "InMemoryStateStore",
     "LoopbackTransport",
     "Membership",
     "NoSuchGrainMethodError",
+    "Reminder",
+    "ReminderStore",
     "Ring",
     "Runtime",
     "StateStore",

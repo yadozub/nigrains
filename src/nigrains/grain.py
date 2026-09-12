@@ -18,6 +18,7 @@ from typing import TYPE_CHECKING, ClassVar
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
 
+    from nigrains.reminders import GrainReminders
     from nigrains.state import GrainState
 
 
@@ -164,6 +165,37 @@ class Grain:
             )
         return self._state
 
+    @property
+    def reminders(self) -> GrainReminders:
+        """This grain's own schedule, the part that outlives an activation.
+
+        Returns:
+            The handle.
+
+        Raises:
+            RuntimeError: The runtime holding this grain has no reminder
+                store. A configuration mistake, said here rather than as an
+                AttributeError further on.
+        """
+        if self._reminders is None:
+            raise RuntimeError(
+                f"{type(self).__name__} asked for reminders and its runtime has no store for them"
+            )
+        return self._reminders
+
+    async def on_reminder(self, name: str) -> None:
+        """Serves a reminder that has come due.
+
+        Overridden by any grain that schedules one. The default does
+        nothing rather than raising, because a schedule outlives the code
+        that made it: a reminder written by a version that had a handler
+        can come due on a version that does not, and taking the process
+        down over it would be the wrong end of that trade.
+
+        Args:
+            name: What the reminder was called when it was scheduled.
+        """
+
     def __init__(self, grain_id: GrainId) -> None:
         """Binds the activation to its identity.
 
@@ -173,6 +205,7 @@ class Grain:
         self.id = grain_id
         self._timers: list[tuple[float, Callable[[], Awaitable[None]]]] = []
         self._state: GrainState | None = None
+        self._reminders: GrainReminders | None = None
 
     def every(self, seconds: float, work: Callable[[], Awaitable[None]]) -> None:
         """Runs something on a schedule for as long as this activation lives.

@@ -1,5 +1,30 @@
 # Changelog
 
+## 0.10.0 — 2026-09-12
+
+**Reminders: a schedule that survives deactivation.** The last item on the
+roadmap, and last because it could not be earlier — it needs a store to
+remember it and a cluster to decide whose turn it is.
+
+- `Runtime(reminders=...)` takes a `ReminderStore`; `InMemoryReminderStore`
+  ships, and no backends do, for the reason no state backends do.
+- `self.reminders.every(name, seconds)` / `.once(...)` / `.cancel(...)`, and
+  `on_reminder(name)` on the grain. Scheduling is idempotent by name, so
+  `activate` can ask every time without checking.
+- The runtime scans on its own; `fire_due_reminders()` is public for a
+  deployment that would rather drive it from its own scheduler.
+
+**Three decisions inside the loop, each of them a defect avoided.** A
+reminder is rescheduled *before* its handler runs, or a handler slower than
+its interval is found due again by the next scan and run twice at once. Only
+the node the ring assigns fires one, or every node in a fleet fires the same
+reminder. And a handler that raises is logged and keeps its schedule, for
+the reason a failing timer does not stop ticking.
+
+`on_reminder` defaults to a no-op rather than raising: a schedule outlives
+the code that wrote it, and a reminder written by a version that had a
+handler can come due on a version that does not.
+
 ## 0.9.0 — 2026-09-12
 
 **The cluster over a real network.** Two extras, so the core keeps its zero

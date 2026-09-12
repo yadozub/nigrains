@@ -107,23 +107,29 @@ itself.** At boot, rather than at the first partition — see below.
 
 ## What it does not do, on purpose
 
-- **No persistence.** A grain loads whatever it wants in `activate()` and
-  that is its business. A storage abstraction with two users that need
-  different things is how a small runtime stops being small.
+- **No storage backends.** State and reminders are ports with an in-memory
+  implementation each, and where the bytes really go is yours. What this
+  package owes you is the semantics — the version that makes two writers a
+  detected conflict, the name that makes scheduling idempotent — not a
+  driver for your database.
 - **No supervision.** A failing call raises to its caller; a grain that
   fails to activate leaves nothing behind and the next call starts over.
-  Restart policy belongs to whatever asked.
-- **No distribution yet.** This is the node-local half: **one `Runtime`**,
-  so single activation is trivially true within it. Two runtimes in one
-  process are two fleets, and an identity in both is two grains — which is
-  the honest boundary, and not the process. A directory and a transport go
-  in front of `Runtime.call`, and nothing in calling code changes when they
-  arrive; that is the point of addressing by identity.
+  Restart policy belongs to whatever asked, which already knows how to
+  resume.
+- **No streams, and no transactions across grains.** Both are real, both are
+  in Orleans, and an honest version of either is larger than everything
+  above put together. A single-writer grain plus the version on its state
+  covers what most people reach for a transaction for.
+- **No live migration.** A grain whose owner changes is deactivated and
+  rebuilt on the new owner; calls in flight during the move fail rather than
+  following it.
 
-## The guarantee it will offer, stated as a limit
+`ROADMAP.md` says which of these are decisions and which are gaps, because
+from outside they look the same and only one is worth an issue.
 
-When distribution lands, single activation is **best effort**. Every
-implementation of this model weakens under a network partition, Orleans
+## The guarantee, stated as a limit
+
+Single activation is **best effort**. Every implementation of this model weakens under a network partition, Orleans
 included, and saying otherwise would be the useful lie that costs someone a
 production incident. A grain that cannot tolerate two of itself must keep
 its authority outside itself — in the database or the cache it fronts —
@@ -196,6 +202,44 @@ recovery is to reload, re-apply and write again.
 
 Nothing is saved automatically: writing on deactivation would write on every
 collection and hide the failure when the write fails.
+
+## A schedule that outlives the activation
+
+A timer belongs to an activation and dies with it. A reminder belongs to the
+grain: it is written down, and when it comes due the runtime **wakes the
+grain** to serve it.
+
+```python
+class Digest(Grain):
+    grain_type = "digest"
+    tolerates_double_activation = True
+
+    async def activate(self) -> None:
+        await self.reminders.every("send", 86400.0)
+
+    async def on_reminder(self, name: str) -> None:
+        await self.send_the_digest()
+```
+
+`Runtime(reminders=...)` takes any store with four operations, the same
+trade as state: `InMemoryReminderStore` ships for tests and for one process,
+and where the rows really go is yours.
+
+Scheduling is idempotent by name, which is what lets `activate` ask every
+time without checking whether it already asked. **In a cluster only the
+owner fires:** every node scans the same store and each skips what the ring
+says is somebody else's, so a reminder fires once rather than once per node.
+A reminder is rescheduled *before* its handler runs, so a handler slower
+than its own interval is not found due again and run twice at once. And a
+handler that raises leaves the schedule standing — one bad afternoon must
+not silently end a daily job.
+
+Two things it deliberately does not do. It does not fire late work that
+piled up while the fleet was down: each reminder fires once when somebody
+next looks, so coming back up is not a stampede. And `on_reminder` defaults
+to doing nothing rather than raising, because a schedule outlives the code
+that wrote it and taking the process down over a name nobody handles any
+more is the wrong end of that trade.
 
 ## Checking your own grain
 

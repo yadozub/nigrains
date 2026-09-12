@@ -35,8 +35,10 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
+from collections import OrderedDict
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager, suppress
+from dataclasses import dataclass
 from types import TracebackType
 from typing import Any, Self
 
@@ -128,6 +130,41 @@ class _Activation:
         self.last_used = now
 
 
+@dataclass(frozen=True, slots=True)
+class Stats:
+    """What the runtime has been doing, as numbers a host can report.
+
+    Read from :attr:`Runtime.stats`. Every field is a plain count, so
+    feeding them to whatever the host already uses - a metrics library, a
+    log line, a health endpoint - costs nothing and commits this package to
+    no dependency and no opinion about how metrics should look.
+
+    Attributes:
+        activated: Grains activated right now.
+        activations: Activations since the runtime was built, including the
+            ones that have since been collected. Rising steadily against a
+            flat ``activated`` means grains are being collected and rebuilt,
+            which is an idle span set too short.
+        failed_activations: Times ``activate()`` raised. Distinct from a
+            call failing: nothing was built, and the next call will try
+            again.
+        deactivations: Grains collected or released on shutdown.
+        evictions: Grains deactivated to stay under ``max_activations``.
+            Nonzero means the bound is doing something, which is worth
+            knowing before blaming the latency on something else.
+        calls: Calls dispatched since the runtime was built.
+        in_flight: Calls running right now.
+    """
+
+    activated: int
+    activations: int
+    failed_activations: int
+    deactivations: int
+    evictions: int
+    calls: int
+    in_flight: int
+
+
 class Runtime:
     """Holds the activations on this node and dispatches calls to them.
 
@@ -145,6 +182,7 @@ class Runtime:
         idle_seconds: float = 300.0,
         sweep_seconds: float = 30.0,
         drain_seconds: float = 30.0,
+        max_activations: int | None = None,
         clock: Callable[[], float] = time.monotonic,
     ) -> None:
         """Builds an empty runtime.
@@ -156,15 +194,30 @@ class Runtime:
                 flight before deactivating anyway. Zero deactivates at once,
                 which is what a process being killed wants and what a
                 process shutting down does not.
+            max_activations: Most grains to keep activated at once, or None
+                for no bound. With a bound, activating one more collects the
+                least recently used idle grain first - which is what makes
+                this a cache rather than a set that only grows. The
+                bookkeeping for one grain is about a kilobyte before the
+                grain holds anything of its own, so a hundred thousand is
+                about a hundred megabytes of runtime and whatever the grains
+                are worth on top.
             clock: Monotonic source of the current time.
         """
         self._factories: dict[str, GrainFactory] = {}
-        self._activations: dict[GrainId, _Activation] = {}
+        self._activations: OrderedDict[GrainId, _Activation] = OrderedDict()
         self._idle_seconds = idle_seconds
         self._sweep_seconds = sweep_seconds
         self._drain_seconds = drain_seconds
+        self._max_activations = max_activations
         self._clock = clock
         self._sweeper: asyncio.Task[None] | None = None
+        self._activations_total = 0
+        self._failed_activations = 0
+        self._deactivations = 0
+        self._evictions = 0
+        self._calls = 0
+        self._in_flight = 0
 
     def register(self, grain: type[Grain], factory: GrainFactory | None = None) -> None:
         """Teaches the runtime how to build one kind of grain.
@@ -292,12 +345,14 @@ class Runtime:
         if factory is None:
             raise GrainNotRegisteredError(grain_id.type)
 
+        await self._make_room()
         activation = _Activation(factory(grain_id), now=self._clock())
         # Published before the hook runs, so a second caller finds it and
         # waits rather than building a second grain. There is no await
         # between the lookup above and this line, which is what makes that
         # safe on one event loop.
         self._activations[grain_id] = activation
+        self._activations_total += 1
         try:
             await activation.grain.activate()
         except BaseException as exc:
@@ -305,6 +360,7 @@ class Runtime:
             # next call starts over. Waiters see the failure, or retry when
             # what failed was a cancellation.
             self._activations.pop(grain_id, None)
+            self._failed_activations += 1
             activation.failure = exc
             if activation.ready is not None:
                 activation.ready.set()
@@ -326,11 +382,39 @@ class Runtime:
             Nothing; the call runs inside.
         """
         activation.in_flight += 1
+        self._in_flight += 1
+        self._calls += 1
         try:
             yield
         finally:
             activation.in_flight -= 1
+            self._in_flight -= 1
             activation.last_used = self._clock()
+            if self._max_activations is not None:
+                # Only when bounded: the move is cheap but not free, and a
+                # runtime with no bound has no use for the ordering.
+                self._activations.move_to_end(activation.grain.id)
+
+    async def _make_room(self) -> None:
+        """Collects the least recently used idle grain if the fleet is full.
+
+        **A full fleet never refuses a call.** The grain being asked for is
+        needed now; something not being used is not. So this evicts rather
+        than rejects, and when nothing can be evicted - every grain is
+        answering - it goes over the bound and says so, because stopping
+        work to honour a cache size would be the wrong way round.
+        """
+        if self._max_activations is None or len(self._activations) < self._max_activations:
+            return
+        for grain_id, activation in self._activations.items():
+            if activation.in_flight == 0 and activation.ready is None:
+                await self._deactivate(grain_id)
+                self._evictions += 1
+                return
+        log.warning(
+            "fleet is at its bound of %d and every grain is busy; activating anyway",
+            self._max_activations,
+        )
 
     async def collect(self) -> int:
         """Deactivates every grain that is idle past the configured span.
@@ -402,6 +486,7 @@ class Runtime:
             # The activation is going regardless; a grain that cannot tidy
             # up must not be able to keep itself alive by failing.
             log.exception("deactivating %s failed", grain_id)
+        self._deactivations += 1
         log.debug("deactivated %s", grain_id)
 
     @property
@@ -412,6 +497,24 @@ class Runtime:
             The count.
         """
         return len(self._activations)
+
+    @property
+    def stats(self) -> Stats:
+        """What this runtime has been doing.
+
+        Returns:
+            A snapshot. Reading it costs nothing and changes nothing, so a
+            health endpoint may call it as often as it likes.
+        """
+        return Stats(
+            activated=len(self._activations),
+            activations=self._activations_total,
+            failed_activations=self._failed_activations,
+            deactivations=self._deactivations,
+            evictions=self._evictions,
+            calls=self._calls,
+            in_flight=self._in_flight,
+        )
 
     async def __aenter__(self) -> Self:
         """Starts the sweeper.

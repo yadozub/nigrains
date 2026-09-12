@@ -19,7 +19,7 @@ import logging
 
 from nigrains.errors import GrainError, GrainNotRegisteredError, NoSuchGrainMethodError
 from nigrains.grain import Grain, GrainId
-from nigrains.runtime import Runtime
+from nigrains.runtime import Runtime, Stats
 
 # So that a host which configured no logging sees no "no handlers" noise,
 # and one which did sees everything. The library's own level is left
@@ -33,4 +33,5 @@ __all__ = [
     "GrainNotRegisteredError",
     "NoSuchGrainMethodError",
     "Runtime",
+    "Stats",
 ]

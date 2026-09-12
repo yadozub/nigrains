@@ -615,3 +615,117 @@ async def test_leaving_does_not_wait_for_ever() -> None:
     assert grains[0].deactivated_while_busy is True
     grains[0].release.set()
     await call
+
+
+async def test_the_counters_say_what_the_runtime_has_been_doing(
+    runtime: Runtime, clock: Clock
+) -> None:
+    """A host reporting on a fleet should not have to read private attributes."""
+    counter = runtime.reference(Counter, "a")
+    await counter.increment()
+    await counter.increment()
+    await runtime.reference(Counter, "b").increment()
+
+    stats = runtime.stats
+    assert (stats.activated, stats.activations, stats.calls) == (2, 2, 3)
+    assert (stats.deactivations, stats.evictions, stats.in_flight) == (0, 0, 0)
+
+    clock.advance(101.0)
+    await runtime.collect()
+
+    assert runtime.stats.activated == 0
+    assert runtime.stats.deactivations == 2
+    assert runtime.stats.activations == 2, "the total does not go down when grains are collected"
+
+
+async def test_a_failed_activation_is_counted_apart_from_a_failed_call(
+    runtime: Runtime,
+) -> None:
+    """Nothing was built, and the next call will try again - a different fact."""
+    Broken.attempts = 0
+
+    with pytest.raises(RuntimeError):
+        await runtime.reference(Broken, "a").ping()
+
+    assert runtime.stats.failed_activations == 1
+    assert runtime.stats.activated == 0
+
+
+async def test_calls_in_flight_are_visible_while_they_run(runtime: Runtime) -> None:
+    """The number a host watches when it wants to know if anything is stuck."""
+    grains: list[Slow] = []
+    runtime.register(SlowProbe, lambda grain_id: _remember(grains, SlowProbe(grain_id)))
+    calls = [
+        asyncio.create_task(runtime.call(GrainId(SlowProbe.grain_type, str(n)), "work"))
+        for n in range(3)
+    ]
+    await _settle()
+
+    assert runtime.stats.in_flight == 3
+
+    for grain in grains:
+        grain.release.set()
+    await asyncio.gather(*calls)
+    assert runtime.stats.in_flight == 0
+
+
+async def test_a_bounded_fleet_collects_the_least_recently_used(clock: Clock) -> None:
+    """What makes it a cache rather than a set that only grows."""
+    Counter.activations = 0
+    runtime = Runtime(idle_seconds=1e9, sweep_seconds=1e9, max_activations=2, clock=clock)
+    runtime.register(Counter)
+
+    await runtime.reference(Counter, "a").increment()
+    clock.advance(1.0)
+    await runtime.reference(Counter, "b").increment()
+    clock.advance(1.0)
+    # Touching "a" makes "b" the least recently used.
+    await runtime.reference(Counter, "a").increment()
+    clock.advance(1.0)
+    await runtime.reference(Counter, "c").increment()
+
+    assert runtime.activated == 2
+    assert runtime.stats.evictions == 1
+    # "a" stayed, so it kept counting; "b" was the one that went.
+    assert await runtime.reference(Counter, "a").increment() == 3
+    # And asking for "b" again builds it afresh - at the cost of evicting
+    # whatever is now least wanted, which is why this is the last thing the
+    # test asks. An earlier draft asked it first and then expected "a" to
+    # have survived, which the eviction it had just caused made untrue.
+    assert await runtime.reference(Counter, "b").increment() == 1
+    assert runtime.stats.evictions == 2
+
+
+async def test_a_full_fleet_of_busy_grains_is_never_a_refused_call() -> None:
+    """The grain being asked for is needed now; a cache size is not.
+
+    Going over the bound is the lesser wrong: refusing would stop work to
+    honour a number, which is the wrong way round.
+    """
+    grains: list[Slow] = []
+    runtime = Runtime(idle_seconds=1e9, sweep_seconds=1e9, max_activations=1)
+    runtime.register(SlowProbe, lambda grain_id: _remember(grains, SlowProbe(grain_id)))
+
+    first = asyncio.create_task(runtime.call(GrainId(SlowProbe.grain_type, "a"), "work"))
+    await _settle()
+    second = asyncio.create_task(runtime.call(GrainId(SlowProbe.grain_type, "b"), "work"))
+    await _settle()
+
+    assert runtime.activated == 2, "both are busy, so neither could be evicted"
+    assert runtime.stats.evictions == 0
+
+    for grain in grains:
+        grain.release.set()
+    await asyncio.gather(first, second)
+
+
+async def test_an_unbounded_fleet_evicts_nothing(clock: Clock) -> None:
+    """The default, and the ordering work is skipped entirely for it."""
+    runtime = Runtime(idle_seconds=1e9, sweep_seconds=1e9, clock=clock)
+    runtime.register(Counter)
+
+    for key in "abcdef":
+        await runtime.reference(Counter, key).increment()
+
+    assert runtime.activated == 6
+    assert runtime.stats.evictions == 0

@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.2.1 — 2026-09-12
+
+- `Runtime.stats` — activations, failed activations, deactivations,
+  evictions, calls and calls in flight. Plain counts, so a host can feed
+  them to whatever it already uses; no dependency and no opinion about how
+  metrics should look. A review of the first consumer had to read a private
+  attribute to count activations, which is what prompted this.
+- `max_activations` bounds the fleet, collecting the least recently used
+  idle grain to make room. A full fleet of busy grains goes over the bound
+  and says so rather than refusing a call: the grain being asked for is
+  needed now, and a cache size is not worth stopping work for. The ordering
+  work is skipped entirely when there is no bound.
+
 ## 0.2.0 — 2026-09-12
 
 **A grain carries its own address, and callers get a typed reference.**

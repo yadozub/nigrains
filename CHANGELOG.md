@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.10.1 — 2026-09-12
+
+The dedication stood in four places. It says more in one: kept as its own
+section in the README, removed from the subtitle, from under the licence,
+and from the package docstring. No code changed.
+
 ## 0.10.0 — 2026-09-12
 
 **Reminders: a schedule that survives deactivation.** The last item on the

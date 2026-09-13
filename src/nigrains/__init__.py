@@ -9,8 +9,9 @@ whether an activation has to be built first and when an idle one goes away.
     async with runtime:
         await runtime.reference(Counter, "a").increment()
 
-See :class:`~nigrains.runtime.Runtime` for what this node-local half does
-and, more importantly, what it does not.
+See :class:`~nigrains.runtime.Runtime` for what it does and, more
+importantly, for the one guarantee it states as a limit rather than as a
+promise.
 """
 
 import logging

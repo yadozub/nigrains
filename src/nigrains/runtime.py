@@ -1,7 +1,7 @@
-"""The single-node half of the runtime: activation, dispatch, collection.
+"""The runtime: activation, dispatch, collection, and routing.
 
-What this does is small and what it deliberately does not do is larger, so
-both are written down.
+What this does is small and what it deliberately does not do is worth
+writing down beside it.
 
 **It activates on demand.** A call names a grain; if no activation exists,
 one is built and :meth:`~nigrains.grain.Grain.activate` is awaited
@@ -18,16 +18,26 @@ longer than the configured span. Idleness is measured from the last call to
 *finish*, not to start: a grain answering a slow call is not idle, and a
 runtime that collected it would deactivate underneath its own caller.
 
-**There is no directory and no transport**, so every grain is here and
-single activation is trivially true. Distribution goes in front of
-:meth:`Runtime.call` as a directory that either dispatches locally, as now,
-or forwards. Nothing in the calling code changes when it arrives, which is
-the point of addressing by identity.
+**It routes, when given a cluster.** A call for a grain this node does not
+own is forwarded to the node that does, and nothing in the calling code
+changes - which is the point of addressing by identity. Placement is
+computed from the live membership rather than recorded, so there is no
+directory to keep consistent, to recover, or to be stale.
 
-**There is no persistence and no supervision.** A grain that fails a call
-raises to its caller and stays activated; a grain that fails to activate
-leaves nothing behind. Restart policies belong to whatever asked, which in
-this system is a job that already knows how to resume.
+**Single activation is best effort once there is more than one node**, and
+that is a limit rather than an oversight: two halves of a split cluster each
+believe they own a share, and each is right about its own half. Every
+implementation of this model weakens here, Orleans included. A grain that
+cannot tolerate two of itself says so on the class, and a clustered runtime
+refuses to start with one.
+
+**There is no supervision.** A grain that fails a call raises to its caller
+and stays activated; a grain that fails to activate leaves nothing behind.
+Restart policy belongs to whatever asked, which already knows how to resume.
+
+**Persistence is a port rather than an absence.** A grain that declares
+itself persistent gets state with a version on it; where the bytes go is the
+deployment's business and no backend ships here.
 """
 
 from __future__ import annotations

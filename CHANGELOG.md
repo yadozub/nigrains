@@ -1,5 +1,26 @@
 # Changelog
 
+## 0.10.2 — 2026-09-13
+
+**Two module docstrings had been describing a package three releases older
+than this one.** `runtime.py` opened by calling itself "the single-node half"
+and stating that there is no directory and no transport, so single activation
+is trivially true - which stopped being so at 0.8.0, when placement and
+forwarding shipped. It also said there is no persistence, which stopped being
+so at 0.7.0. `__init__.py` sent the reader to "this node-local half".
+
+Corrected, and the correction says the limit out loud rather than the
+absence: the runtime routes when given a cluster, single activation is best
+effort once there is more than one node, and persistence is a port with no
+backend rather than a gap.
+
+Worth naming as a habit rather than an incident, because it is the second
+time in two days: prose describing what a thing does *not* do is the prose
+nobody revisits when it starts doing it. The README's own list of refusals
+was two releases stale when it was found on 2026-09-12.
+
+No code changed.
+
 ## 0.10.1 — 2026-09-12
 
 The dedication stood in four places. It says more in one: kept as its own

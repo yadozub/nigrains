@@ -9,11 +9,11 @@ experiment must be cheap to delete.
 the pure part — with the hash as a parameter rather than modelled, and two
 theorems about it:
 
-- `owner_ignores_order_and_repetition`: the correctness of the reorder
-  cache in `Cluster.owner_of`;
-- `a_joiner_takes_only_what_moved`: the property a consistent hash exists
-  for, which the tests measure over 4000 keys and this states for all of
-  them.
+- `owner_ignores_order_and_repetition` (proven): the correctness of the
+  reorder cache in `Cluster.owner_of`;
+- `a_joiner_takes_only_what_moved` (still owed): the property a consistent
+  hash exists for, which the tests measure over 4000 keys and this states
+  for all of them.
 
 **The sorry ledger.** Every `sorry` in `Ring.lean` is a theorem stated but
 not yet owed its proof; `lake build` succeeds while owing them. The ledger
@@ -45,5 +45,5 @@ runtime.
 
 To build:
 
-    elan default leanprover/lean4:stable   # once
+    elan default leanprover/lean4:v4.35.0  # once; the pin lives in lean-toolchain
     cd lean && lake build

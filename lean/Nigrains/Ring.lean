@@ -100,9 +100,8 @@ theorem insertBy_perm (le : α → α → Bool) (a : α) :
   | [] => List.Perm.refl _
   | b :: bs => by
       by_cases h : le a b = true
-      · simp only [insertBy, if_pos h]
-        exact List.Perm.refl _
-      · simp only [insertBy, if_neg h]
+      · simp [insertBy, h]
+      · simp [insertBy, h]
         exact List.Perm.trans (List.Perm.cons b (insertBy_perm le a bs))
           (List.Perm.swap a b bs)
 
@@ -183,7 +182,7 @@ theorem insertBy_comm_aux : ∀ {a b : String}, SLe a b → ∀ l : List String,
             subst hab'; rfl
           · simp [insertBy, strLe_false hbx, strLe_true hax,
               strLe_false hba]
-        · simp [insertBy, strLe_true hab, strLe_false hbx, strLe_false hax]
+        · simp [insertBy, strLe_false hbx, strLe_false hax]
           rw [insertBy_comm_aux hab xs]
 
 theorem insertBy_comm (a b : String) (l : List String) :

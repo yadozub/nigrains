@@ -17,7 +17,14 @@ theorems about it:
 
 **The sorry ledger.** Every `sorry` in `Ring.lean` is a theorem stated but
 not yet owed its proof; `lake build` succeeds while owing them. The ledger
-shrinks or the experiment failed honestly.
+shrinks or the experiment failed honestly. It shrank once: the reorder
+theorem is proven, in core Lean with no Batteries — the route through the
+library's `Sorted`/`eq_of_perm_of_sorted` needed Batteries, the route that
+worked needed none of it, only that the string order is total, antisymmetric
+and transitive, which core provides. A differential check under a shared
+hash (FNV-1a substituted on both sides) matched the Python `Ring` on 700 of
+700 owners, so the proof is about a model that computes what the production
+code computes.
 
 **The walls, named in advance** so that hitting one is a result and not a
 surprise:

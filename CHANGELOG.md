@@ -1,5 +1,30 @@
 # Changelog
 
+## 0.10.3 — 2026-11-07
+
+**The sweep now collects a grain the ring gave away, not only one that went
+idle.** The README has promised since the ring shipped that a grain whose
+owner changes is deactivated and rebuilt on the new owner; the sweeper was
+only ever looking at idleness, so a moved grain kept answering calls from
+nodes whose snapshot was stale - for the whole idle span, minutes by
+default, rather than for the moment two snapshots disagree. A call in
+flight is still waited out, and a grain still activating is still never
+touched.
+
+**And the ring learned two things about snapshots.** A reordered
+membership no longer rebuilds the ring: the contract lets `members()`
+answer in any order, and the tuple compare alone made every permutation
+cost N×128 hashes - now a difference is settled as a set, and a mere
+permutation is absorbed. And an empty snapshot means this node alone
+rather than the ring's `ValueError` on every routed call: the answer
+`ValkeyMembership` gives on purpose, now given to a custom membership
+that blips too.
+
+Three tests come with it: the collection that does not wait for idleness,
+the reorder that does not rebuild, the empty snapshot that means this
+node. And the license appendix, which still carried the template's
+"[yyyy] [name of copyright owner]", names its holder at last.
+
 ## 0.10.2 — 2026-09-13
 
 **Two module docstrings had been describing a package three releases older

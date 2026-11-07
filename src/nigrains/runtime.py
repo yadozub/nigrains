@@ -835,10 +835,21 @@ class Runtime:
                 # this node, and nothing would say so.
                 log.exception("the reminder scan failed")
 
-    async def collect(self) -> int:
-        """Deactivates every grain that is idle past the configured span.
+    def _no_longer_mine(self, grain_id: GrainId) -> bool:
+        """Whether the ring has given this grain to another node.
 
-        **The walk is chunked and the idleness is checked twice**, and both
+        Args:
+            grain_id: Which grain.
+
+        Returns:
+            False whenever there is no cluster to disagree with.
+        """
+        return self._cluster is not None and not self._cluster.is_mine(grain_id)
+
+    async def collect(self) -> int:
+        """Deactivates idle grains, and grains this node no longer owns.
+
+        **The walk is chunked and the staleness is checked twice**, and both
         are consequences of a fleet being large. A sweep of 100 000 idle
         grains held the event loop for 79 ms in one block while nothing else
         ran; yielding every few thousand turns that into pauses nobody
@@ -846,6 +857,15 @@ class Runtime:
         stale can be called before the sweep reaches it - so what was
         decided at the top of the walk is confirmed at the bottom, rather
         than deactivating a grain somebody is using.
+
+        **A grain whose owner changed is collected without waiting for
+        idleness.** The membership moved its share, and the grain will be
+        rebuilt on the new owner by whoever calls it next. Keeping the
+        activation until the idle span ran out would keep it answering
+        calls from nodes whose snapshot is stale - for minutes by default,
+        rather than for the moment two snapshots disagree. A call in flight
+        is still waited out: a change of ownership changes nothing about
+        deactivating under a caller.
 
         **A grain that has not finished activating is never idle**, however
         long it has been sitting there. Its call count is still zero and its
@@ -872,7 +892,7 @@ class Runtime:
             for grain_id, activation in self._activations.items()
             if activation.ready is None
             and activation.in_flight == 0
-            and activation.last_used <= cutoff
+            and (activation.last_used <= cutoff or self._no_longer_mine(grain_id))
         ]
         collected = 0
         for index, grain_id in enumerate(stale):
@@ -881,7 +901,7 @@ class Runtime:
                 activation is None
                 or activation.ready is not None
                 or activation.in_flight
-                or activation.last_used > cutoff
+                or (activation.last_used > cutoff and not self._no_longer_mine(grain_id))
             ):
                 continue
             await self._deactivate(grain_id)

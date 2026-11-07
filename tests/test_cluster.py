@@ -306,3 +306,53 @@ async def test_a_delivered_call_is_not_routed_again() -> None:
 
     assert answer == "one"
     assert fleet["one"].stats.forwarded == 0
+
+
+async def test_a_grain_this_node_no_longer_owns_is_collected_without_waiting_for_idleness() -> (
+    None
+):
+    """The README promises it: deactivated and rebuilt on the new owner.
+
+    Without this, a node whose share moved away keeps serving its stale
+    activations to whoever still routes to it - for the whole idle span,
+    which is minutes by default, rather than for the moment two membership
+    snapshots disagree.
+    """
+    fleet = _fleet("one", "two")
+    key = _key_owned_by(fleet["one"], mine=True)
+
+    await fleet["two"].reference(Tenant, key).where()
+    assert fleet["one"].activated == 1
+
+    membership = _cluster_of(fleet["one"]).membership
+    assert isinstance(membership, StaticMembership)
+    membership.replace(["two"])
+
+    collected = await fleet["one"].collect()
+
+    assert collected == 1, "the grain is not idle - it is somebody else's"
+    assert fleet["one"].activated == 0
+
+
+async def test_a_reordered_membership_does_not_rebuild_the_ring() -> None:
+    """Order is the membership's business; rebuilding over it would cost thousands of hashes."""
+    membership = StaticMembership("one", ["one", "two", "three"])
+    cluster = Cluster(membership, LoopbackTransport())
+
+    cluster.owner_of(GrainId(Tenant.grain_type, "k0"))
+    ring = cluster._ring
+    membership.replace(["three", "one", "two"])
+    cluster.owner_of(GrainId(Tenant.grain_type, "k0"))
+
+    assert cluster._ring is ring, "the same nodes in another order are the same ring"
+
+
+async def test_an_empty_membership_means_this_node_alone() -> None:
+    """A snapshot that missed everything must not fail every call, nor forward them away."""
+    membership = StaticMembership("one", ["one", "two"])
+    cluster = Cluster(membership, LoopbackTransport())
+
+    membership.replace([])
+
+    assert cluster.owner_of(GrainId(Tenant.grain_type, "k0")) == "one"
+    assert cluster.is_mine(GrainId(Tenant.grain_type, "k0"))

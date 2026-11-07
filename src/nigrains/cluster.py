@@ -226,13 +226,24 @@ class Cluster:
     replicas: int = DEFAULT_REPLICAS
     _ring: Ring | None = field(default=None, init=False, repr=False)
     _seen: tuple[str, ...] = field(default=(), init=False, repr=False)
+    _seen_set: frozenset[str] = field(default_factory=frozenset, init=False, repr=False)
 
     def owner_of(self, grain_id: GrainId) -> str:
         """Returns the node that should hold a grain.
 
         The ring is rebuilt only when the membership has actually changed,
         because this runs on every routed call and building a ring is
-        thousands of hashes.
+        thousands of hashes. The cheap question is asked first - the tuple
+        compare a snapshot that has not changed answers at once - and only
+        a difference is settled as a set, because the contract lets
+        ``members()`` answer in any order and a snapshot reordered but
+        otherwise identical must not cost a rebuild either.
+
+        An empty membership is taken to mean this node alone, the answer
+        :class:`ValkeyMembership` gives on purpose: a read that missed
+        everything - a blip, a store not yet read - must not make a runtime
+        believe it is not in its own fleet, and must not fail every call
+        with the ring's ``ValueError`` either.
 
         Args:
             grain_id: The identity to place.
@@ -240,9 +251,15 @@ class Cluster:
         Returns:
             The owning node.
         """
-        members = tuple(self.membership.members())
-        if self._ring is None or members != self._seen:
+        members = tuple(self.membership.members()) or (self.membership.node,)
+        if self._ring is None:
             self._ring = Ring(members, replicas=self.replicas)
+            self._seen = members
+            self._seen_set = frozenset(members)
+        elif members != self._seen:
+            if frozenset(members) != self._seen_set:
+                self._ring = Ring(members, replicas=self.replicas)
+                self._seen_set = frozenset(members)
             self._seen = members
         return self._ring.owner(str(grain_id))
 

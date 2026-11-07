@@ -1,0 +1,6 @@
+name = "nigrains-lean"
+version = "0.1.0"
+defaultTargets = ["Nigrains"]
+
+[[lean_lib]]
+name = "Nigrains"
